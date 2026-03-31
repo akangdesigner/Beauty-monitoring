@@ -665,9 +665,142 @@
       animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─── Add Product Modal ─── */
+    .modal-backdrop {
+      display: none;
+      position: fixed; inset: 0; z-index: 8000;
+      background: #00000088;
+      backdrop-filter: blur(6px);
+      align-items: center; justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      background: #13102a;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      width: 560px; max-width: 95vw;
+      max-height: 90vh; overflow-y: auto;
+      padding: 28px;
+      animation: fadeUp 0.25s ease both;
+    }
+    .modal-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 22px; font-weight: 300;
+      margin-bottom: 22px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-close {
+      background: none; border: none; color: var(--text-muted);
+      font-size: 20px; cursor: pointer; line-height: 1;
+      transition: color 0.2s;
+    }
+    .modal-close:hover { color: var(--text-primary); }
+
+    .modal-section {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px; letter-spacing: 0.15em;
+      color: var(--amethyst); text-transform: uppercase;
+      margin: 18px 0 10px;
+    }
+    .modal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .url-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 10px;
+    }
+    .url-label {
+      font-family: 'DM Mono', monospace; font-size: 11px;
+      width: 52px; flex-shrink: 0;
+    }
+    .url-label.watsons { color: var(--watsons); }
+    .url-label.cosmed  { color: var(--cosmed);  }
+    .url-label.momo    { color: var(--momo);    }
+    .emoji-picker {
+      display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px;
+    }
+    .emoji-btn {
+      width: 36px; height: 36px; border-radius: 8px;
+      background: var(--bg-surface); border: 1px solid var(--border);
+      font-size: 18px; cursor: pointer; transition: all 0.15s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .emoji-btn:hover, .emoji-btn.selected {
+      border-color: var(--amethyst);
+      background: var(--amethyst-dim);
+    }
+    .modal-footer {
+      display: flex; justify-content: flex-end; gap: 10px;
+      margin-top: 24px; padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
   </style>
 </head>
 <body>
+  <!-- ── Add Product Modal ── -->
+  <div class="modal-backdrop" id="addProductModal" onclick="closeModalOnBackdrop(event)">
+    <div class="modal">
+      <div class="modal-title">
+        新增監控商品
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+
+      <div class="modal-section">基本資訊</div>
+      <div class="modal-row">
+        <div class="form-group">
+          <label class="form-label">商品名稱 *</label>
+          <input class="form-input" id="mpName" placeholder="例：SK-II 神仙水 230ml">
+        </div>
+        <div class="form-group">
+          <label class="form-label">品牌</label>
+          <input class="form-input" id="mpBrand" placeholder="例：SK-II">
+        </div>
+      </div>
+
+      <div class="modal-row" style="margin-top:12px">
+        <div class="form-group">
+          <label class="form-label">品類</label>
+          <select class="form-input select-styled" id="mpCategory">
+            <option value="skincare">保養</option>
+            <option value="makeup">彩妝</option>
+            <option value="haircare">洗護</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">圖示</label>
+          <div class="emoji-picker" id="emojiPicker">
+            <div class="emoji-btn selected" data-emoji="✨" onclick="selectEmoji(this)">✨</div>
+            <div class="emoji-btn" data-emoji="💄" onclick="selectEmoji(this)">💄</div>
+            <div class="emoji-btn" data-emoji="🖤" onclick="selectEmoji(this)">🖤</div>
+            <div class="emoji-btn" data-emoji="💋" onclick="selectEmoji(this)">💋</div>
+            <div class="emoji-btn" data-emoji="🌸" onclick="selectEmoji(this)">🌸</div>
+            <div class="emoji-btn" data-emoji="💊" onclick="selectEmoji(this)">💊</div>
+            <div class="emoji-btn" data-emoji="🧴" onclick="selectEmoji(this)">🧴</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-section">各平台商品網址</div>
+      <div class="url-row">
+        <span class="url-label watsons">屈臣氏</span>
+        <input class="form-input" id="urlWatsons" placeholder="https://www.watsons.com.tw/product/...">
+      </div>
+      <div class="url-row">
+        <span class="url-label cosmed">康是美</span>
+        <input class="form-input" id="urlCosmed" placeholder="https://www.cosmed.com.tw/product/...">
+      </div>
+      <div class="url-row">
+        <span class="url-label momo">MOMO</span>
+        <input class="form-input" id="urlMomo" placeholder="https://www.momoshop.com.tw/goods/...">
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+        <button class="btn btn-primary" id="btnAddProduct" onclick="submitProduct()">✦ 加入監控</button>
+      </div>
+    </div>
+  </div>
+
   <div id="offline-banner">⚠ 無法連線後端伺服器（localhost:3000）— 目前顯示示範資料，請執行 npm run dev 啟動後端</div>
   <div id="toast-container"></div>
 
@@ -732,7 +865,7 @@
         <button class="btn btn-ghost btn-icon" onclick="simulateScrape()" data-tip="手動觸發爬蟲">
           ↻ 立即抓取
         </button>
-        <button class="btn btn-primary">
+        <button class="btn btn-primary" onclick="openModal()">
           ✦ 新增商品
         </button>
       </div>
@@ -1447,6 +1580,71 @@
     renderTable(); renderAlerts();
     await updateChart();
     if (isOnline) loadLineSettings();
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ── Add Product Modal ─────────────────────────────────
+  // ═══════════════════════════════════════════════════════
+  function openModal() {
+    document.getElementById('addProductModal').classList.add('open');
+    document.getElementById('mpName').focus();
+  }
+  function closeModal() {
+    document.getElementById('addProductModal').classList.remove('open');
+  }
+  function closeModalOnBackdrop(e) {
+    if (e.target === document.getElementById('addProductModal')) closeModal();
+  }
+  function selectEmoji(el) {
+    document.querySelectorAll('.emoji-btn').forEach(b => b.classList.remove('selected'));
+    el.classList.add('selected');
+  }
+
+  async function submitProduct() {
+    const name  = document.getElementById('mpName').value.trim();
+    const brand = document.getElementById('mpBrand').value.trim();
+    const category = document.getElementById('mpCategory').value;
+    const emoji = document.querySelector('.emoji-btn.selected')?.dataset.emoji || '✨';
+    const urlW  = document.getElementById('urlWatsons').value.trim();
+    const urlC  = document.getElementById('urlCosmed').value.trim();
+    const urlM  = document.getElementById('urlMomo').value.trim();
+
+    if (!name) { toast('請填寫商品名稱', 'error'); return; }
+    if (!urlW && !urlC && !urlM) { toast('至少填寫一個平台網址', 'error'); return; }
+
+    const urls = [];
+    if (urlW) urls.push({ platform: 'watsons', url: urlW });
+    if (urlC) urls.push({ platform: 'cosmed',  url: urlC });
+    if (urlM) urls.push({ platform: 'momo',    url: urlM });
+
+    const btn = document.getElementById('btnAddProduct');
+    btn.classList.add('loading');
+
+    if (!isOnline) {
+      toast('⚠ 後端離線，無法儲存商品', 'error');
+      btn.classList.remove('loading');
+      return;
+    }
+
+    try {
+      await apiFetch('/api/products', {
+        method: 'POST',
+        body: JSON.stringify({ name, brand, category, emoji, urls }),
+      });
+      toast(`✅ 已新增「${name}」到監控清單`, 'success');
+      closeModal();
+      // 清空表單
+      ['mpName','mpBrand','urlWatsons','urlCosmed','urlMomo'].forEach(id => {
+        document.getElementById(id).value = '';
+      });
+      document.querySelectorAll('.emoji-btn').forEach((b,i) => b.classList.toggle('selected', i===0));
+      // 刷新比價表
+      await loadProducts();
+      renderTable();
+    } catch (err) {
+      toast(`新增失敗：${err.message}`, 'error');
+    }
+    btn.classList.remove('loading');
   }
 
   // ── Init ───────────────────────────────────────────────
