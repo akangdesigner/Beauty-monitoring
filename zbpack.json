@@ -1,0 +1,4 @@
+{
+  "build_command": "cd server && npm install && cd ../frontend && npm install --include=dev && npm run build",
+  "start_command": "cd server && node server.js"
+}

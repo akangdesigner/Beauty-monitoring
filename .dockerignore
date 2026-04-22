@@ -1,0 +1,11 @@
+node_modules
+frontend/node_modules
+server/node_modules
+frontend/dist
+server/db/*.sqlite
+server/db/*.sqlite-shm
+server/db/*.sqlite-wal
+.git
+.gitignore
+*.log
+logs

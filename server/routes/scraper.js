@@ -1,0 +1,708 @@
+const express  = require('express');
+const router   = express.Router();
+const fs       = require('fs');
+const path     = require('path');
+const cron     = require('node-cron');
+const { v4: uuidv4 } = require('uuid');
+const { getDB } = require('../db');
+const { runScrapeJob } = require('../jobs/scheduledScrape');
+const AlertService = require('../services/AlertService');
+const logger = require('../utils/logger');
+
+// ── 排程設定存檔路徑 ──
+const SCHEDULE_FILE = path.join(__dirname, '../scraper-schedule.json');
+
+function loadSchedule() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SCHEDULE_FILE, 'utf8'));
+    if (!Array.isArray(raw.urls)) raw.urls = [];
+    return raw;
+  } catch {
+    return { enabled: false, time: '03:00', days: 'daily', urls: [] };
+  }
+}
+
+function saveSchedule(s) {
+  fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(s, null, 2));
+}
+
+// ── DB 遷移：scrape_jobs 加入 target_url 欄位 ──
+try {
+  getDB().exec('ALTER TABLE scrape_jobs ADD COLUMN target_url TEXT');
+} catch {}   // 欄位已存在時忽略
+
+// ── days → cron 週幾格式 ──
+function daysToCron(days) {
+  const map = { daily: '*', weekdays: '1-5', 'mon-wed-fri': '1,3,5', weekly: '1' };
+  return map[days] || '*';
+}
+
+// ── 當前排程任務 ──
+let currentCronJob = null;
+
+function applySchedule(s) {
+  if (currentCronJob) { currentCronJob.stop(); currentCronJob = null; }
+  if (!s.enabled || !s.urls?.length) return;
+  const [hh, mm] = s.time.split(':');
+  const expr = `${mm} ${hh} * * ${daysToCron(s.days)}`;
+  currentCronJob = cron.schedule(expr, async () => {
+    const current = loadSchedule(); // 每次觸發重新讀設定，確保取得最新 URL 清單
+    const enabledUrls = current.urls.filter(u => u.enabled);
+    logger.info(`[排程] 啟動分類頁爬取，共 ${enabledUrls.length} 個 URL`);
+
+    for (const item of enabledUrls) {
+      const db = getDB();
+      const jobId = uuidv4();
+      db.prepare('INSERT INTO scrape_jobs (id, platform, target_url) VALUES (?, ?, ?)').run(jobId, item.platform, item.url);
+
+      try {
+        const scraped = await scrapeCategoryPage(item.url, item.platform);
+        const result  = await matchAndUpdate(scraped, item.platform);
+        db.prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`)
+          .run(result.total, jobId);
+        logger.info(`[排程] ${item.platform} 完成：新增 ${result.added}，更新 ${result.updated}，共 ${result.total} 筆`);
+      } catch (err) {
+        db.prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
+          .run(err.message, jobId);
+        logger.error(`[排程] 爬取失敗 ${item.url}: ${err.message}`);
+      }
+    }
+  }, { timezone: 'Asia/Taipei' });
+}
+
+// 啟動時套用已儲存的排程
+applySchedule(loadSchedule());
+
+// ── 平台偵測 ──
+function detectPlatform(url) {
+  if (url.includes('watsons.com.tw')) return 'watsons';
+  if (url.includes('cosmed.com.tw'))  return 'cosmed';
+  if (url.includes('pchome.com.tw'))  return 'pchome';
+  if (url.includes('poyabuy.com.tw')) return 'poya';
+  return null;
+}
+
+const PLATFORM_LABEL = { watsons: '屈臣氏', cosmed: '康是美', pchome: 'PChome', poya: '寶雅' };
+
+// ── 名稱比對工具 ──
+function normalizeName(name) {
+  return name.toLowerCase()
+    .replace(/maybelline|媚比琳/g, 'maybelline')
+    .replace(/kate|凱婷/g, 'kate')
+    .replace(/heme|喜蜜/g, 'heme')
+    .replace(/\s+/g, ' ').trim();
+}
+function getTokens(name) {
+  return normalizeName(name).split(/[\s\-_\/,]+/)
+    .filter(t => t.length > 1 && !/^\d+(\.\d+)?(g|ml|mg)$/.test(t));
+}
+function similarity(a, b) {
+  const sA = new Set(getTokens(a)), sB = new Set(getTokens(b));
+  const inter = [...sA].filter(t => sB.has(t)).length;
+  const minLen = Math.min(sA.size, sB.size);
+  return minLen > 0 ? inter / minLen : 0;
+}
+
+// ── AI 批次解析商品名稱（Groq）──
+// 回傳 Map<name, { baseName, brand, productType, variant }>
+// 解析失敗的商品記錄 warn，不使用任何 fallback 表達式
+const AI_BATCH_SIZE = 20; // 每批 20 筆，避免 8b 模型回傳截斷
+
+async function parseNamesWithAI(names) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || names.length === 0) return new Map();
+
+  const Groq = require('groq-sdk');
+  const groq = new Groq({ apiKey });
+  const result = new Map();
+
+  const unique = [...new Set(names)];
+  const batches = [];
+  for (let i = 0; i < unique.length; i += AI_BATCH_SIZE) {
+    batches.push(unique.slice(i, i + AI_BATCH_SIZE));
+  }
+
+  // 提示詞：要求 brand / productType / spec，baseName 由程式自組
+  const PROMPT_HEADER = `你是電商數據清理專家。針對每筆商品名稱，回傳 brand（品牌）、productType（產品類別）和 spec（規格）。
+
+規則：
+- 去除【...】促銷標籤（如【即期品】【特惠】）
+- 重複品牌只保留一次（如 "HEME heme" → "HEME"）
+- productType 必須是完整名詞（≥2字），不可只有「唇」「膚」等單字，無法辨識填「商品」
+- productType 只填核心品類（如「唇釉」「洗髮精」），不含顏色/系列描述
+- spec 填容量或數量規格（如 "3g"、"600ml"、"1.5g"、"3條"），找不到則填 ""
+- spec 不要填色號（如 "#01"、"No.3"）或系列名稱
+
+範例輸出：
+[{"i":0,"brand":"3CE","productType":"唇釉","spec":""},{"i":1,"brand":"潘婷","productType":"洗髮精","spec":"600ml"},{"i":2,"brand":"DHC","productType":"護唇膏","spec":"1.5g"}]
+
+只回傳 JSON 陣列，不要其他文字。商品清單：`;
+
+  for (const batch of batches) {
+    let attempt = 0;
+    while (attempt < 2) {
+      try {
+        const listed = batch.map((n, i) => `${i}: ${n}`).join('\n');
+        const res = await groq.chat.completions.create({
+          model: 'llama-3.1-8b-instant',
+          messages: [{ role: 'user', content: PROMPT_HEADER + '\n' + listed }],
+          temperature: 0,
+          max_tokens: 1500,
+        });
+
+        const text = res.choices[0]?.message?.content?.trim() || '[]';
+        // 用括號深度計數，取出第一個完整的 [...] 避免模型附加說明文字造成 parse 錯誤
+        const jsonStr = (() => {
+          let depth = 0, start = -1;
+          for (let i = 0; i < text.length; i++) {
+            if (text[i] === '[') { if (start === -1) start = i; depth++; }
+            else if (text[i] === ']') { if (--depth === 0 && start !== -1) return text.slice(start, i + 1); }
+          }
+          return null;
+        })();
+        if (!jsonStr) { logger.warn('[AI解析] 回傳非 JSON'); break; }
+
+        const parsed = JSON.parse(jsonStr);
+        parsed.forEach(p => {
+          if (typeof p.i !== 'number' || p.i < 0 || p.i >= batch.length) return;
+          if (!p.productType || p.productType.length <= 1) return;
+          const originalName = batch[p.i];
+          const brand = (p.brand || '').trim();
+          const productType = (p.productType || '').trim();
+          const rawSpec = (p.spec || '').trim().replace(/\s+/g, '');
+          // 只接受帶單位的規格，且必須實際出現在商品名稱中（防止 AI 幻覺）
+          const isValidUnit = /^[\d.]+\s*(ml|l|g|mg|kg|oz|抽|片|包|入|顆|條)$/i.test(rawSpec);
+          const nameNorm = originalName.replace(/\s+/g, '').toLowerCase();
+          const spec = (isValidUnit && nameNorm.includes(rawSpec.toLowerCase())) ? rawSpec : '';
+          result.set(originalName, {
+            brand,
+            productType,
+            baseName: spec ? `${brand}${productType}${spec}` : `${brand}${productType}`,
+            variant: '',
+          });
+        });
+        logger.info(`[AI解析] 批次 ${batch.length} 筆完成`);
+        break;
+      } catch (err) {
+        attempt++;
+        if (attempt >= 2) logger.warn(`[AI解析] 批次失敗（已重試）：${err.message}`);
+      }
+    }
+  }
+
+  return result;
+}
+
+// ── Puppeteer 爬取分類頁 ──
+async function scrapeCategoryPage(url, platform) {
+  const puppeteer = require('puppeteer-extra');
+  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+  puppeteer.use(StealthPlugin());
+  const headlessEnv = (process.env.PUPPETEER_HEADLESS || "").toLowerCase();
+  const headless =
+    headlessEnv === "new"
+      ? "new"
+      : headlessEnv === "false"
+      ? false
+      : headlessEnv === "true"
+      ? true
+      : process.env.NODE_ENV === "production"
+      ? "new"
+      : false;
+
+  const browser = await puppeteer.launch({
+    headless,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--start-maximized'],
+  });
+  const page = await browser.newPage();
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+  await page.setViewport({ width: 1366, height: 768 });
+
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 3000));
+
+    if (platform === 'watsons') {
+      return await page.evaluate(() => {
+        const extractNums = (text) => {
+          if (!text) return [];
+          const matches = text.match(/\d[\d,]*/g) || [];
+          return matches
+            .map(s => Number(String(s).replace(/,/g, '')))
+            .filter(n => Number.isFinite(n) && n > 0);
+        };
+
+        return Array.from(document.querySelectorAll('.productContainer')).map(el => {
+          const name = el.querySelector('.productName, .name')?.innerText?.trim() || '';
+
+          const priceText = el.querySelector('.afterPromo-price, .productPrice')?.innerText?.trim() || '';
+          const origText  = el.querySelector('.afPromo-originPrice, .productOriginalPrice')?.innerText?.trim() || '';
+
+          const numsPrice = extractNums(priceText);
+          const numsOrig  = extractNums(origText);
+
+          let price = numsPrice[0] ?? null;
+          let origPrice = numsOrig[0] ?? null;
+          if (!origPrice && numsPrice.length >= 2) origPrice = numsPrice[1];
+
+          // 跳過 badge/icon 圖，取第一張商品圖（src 包含 prodcat 或 publishing）
+          const imgs = Array.from(el.querySelectorAll('img'));
+          const prodImg = imgs.find(i => {
+            const s = i.src || i.dataset?.src || '';
+            return s.includes('prodcat') || s.includes('publishing');
+          });
+          const imageUrl = prodImg?.src || prodImg?.dataset?.src || '';
+          const productUrl = el.querySelector('a[href]')?.href || '';
+
+          return { name, price, origPrice, imageUrl, productUrl };
+        }).filter(p => p.name);
+      });
+    }
+
+    if (platform === 'cosmed') {
+      let prev = 0;
+      for (let i = 0; i < 15; i++) {
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await new Promise(r => setTimeout(r, 1500));
+        const cur = await page.evaluate(() => document.querySelectorAll('.product-card__vertical__wrapper').length);
+        if (cur === prev) break;
+        prev = cur;
+      }
+      return await page.evaluate(() => {
+        const extractFirstNum = (text) => {
+          if (!text) return null;
+          const m = text.match(/\d[\d,]*/);
+          if (!m) return null;
+          const n = Number(String(m[0]).replace(/,/g, ''));
+          return Number.isFinite(n) && n > 0 ? n : null;
+        };
+
+        return Array.from(document.querySelectorAll('.product-card__vertical__wrapper')).map(el => {
+          const name = el.querySelector('[data-qe-id="body-sale-page-title-text"]')?.innerText?.trim() || '';
+          const priceText = el.querySelector('[data-qe-id="body-price-text"]')?.innerText?.trim() || '';
+          const origText  = el.querySelector('[data-qe-id="body-suggest-price-text"]')?.innerText?.trim() || '';
+          const imgs = Array.from(el.querySelectorAll('img'));
+          // 91app 商品圖 URL 含 SalePage，badge 含 ProductBadge
+          const prodImg = imgs.find(i => (i.src || i.dataset?.src || '').includes('SalePage'))
+            || imgs.find(i => !(i.src || i.dataset?.src || '').includes('Badge'))
+            || imgs[0];
+          const imageUrl = prodImg?.src || prodImg?.dataset?.src || '';
+          const productUrl = el.closest('a[href]')?.href || el.querySelector('a[href]')?.href || '';
+          return {
+            name,
+            price: extractFirstNum(priceText),
+            origPrice: extractFirstNum(origText),
+            imageUrl,
+            productUrl,
+          };
+        }).filter(p => p.name);
+      });
+    }
+
+    if (platform === 'poya') {
+      // POYA（91app）分類頁：等待商品卡出現，支援多種 href 格式
+      const POYA_CARD_SEL = 'a[href*="SalePage"]';
+      try {
+        await page.waitForSelector(POYA_CARD_SEL, { timeout: 20000 });
+        // 觸發懶載入
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await new Promise(r => setTimeout(r, 1500));
+      } catch {}
+
+      return await page.evaluate(() => {
+        const extractPrices = (text) => {
+          if (!text) return [];
+          // 支援 NT$xxx、$xxx、純數字（後接元或空白）
+          const patterns = [
+            /NT\$\s*([\d,]+)/g,
+            /\$\s*([\d,]+)/g,
+            /(\d[\d,]*)\s*元/g,
+          ];
+          const nums = [];
+          for (const re of patterns) {
+            for (const m of text.matchAll(re)) {
+              const n = Number(m[1].replace(/,/g, ''));
+              if (Number.isFinite(n) && n >= 10 && n < 100000) nums.push(n);
+            }
+          }
+          return nums;
+        };
+
+        const pickNameFromText = (text) => {
+          if (!text) return '';
+          const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+          for (const l of lines) {
+            if (l === '貨到通知') continue;
+            if (/^(NT)?\$[\d,]/.test(l)) continue;
+            if (/^共\s*\d+\s*項商品/.test(l)) continue;
+            if (/^POYA|^寶雅|限定$|^限定|特賣|活動/.test(l) && l.length <= 10) continue;
+            if (/^\d+$/.test(l)) continue;
+            if (l.length >= 3 && l.length <= 120) return l;
+          }
+          return '';
+        };
+
+        const cards = Array.from(document.querySelectorAll('a[href*="SalePage"]'));
+        // 去除重複 href
+        const seen = new Set();
+        const unique = cards.filter(c => {
+          const h = c.getAttribute('href');
+          if (seen.has(h)) return false;
+          seen.add(h);
+          return true;
+        });
+
+        return unique.map(card => {
+          const text = card.innerText || '';
+          const name = pickNameFromText(text);
+          const prices = extractPrices(text);
+          if (!name || prices.length === 0) return null;
+
+          const min = Math.min(...prices);
+          const max = Math.max(...prices);
+          const price = Number.isFinite(min) ? min : null;
+          const origPrice = (Number.isFinite(max) && max > min) ? max : null;
+
+          const imgs = Array.from(card.querySelectorAll('img'));
+          const prodImg = imgs.find(i => (i.src || i.dataset?.src || '').includes('SalePage'))
+            || imgs.find(i => !(i.src || i.dataset?.src || '').includes('Badge'))
+            || imgs[0];
+          const imageUrl = prodImg?.src || prodImg?.dataset?.src || '';
+          const productUrl = card.href || '';
+          return { name, price, origPrice, imageUrl, productUrl };
+        }).filter(Boolean);
+      });
+    }
+
+    return [];
+  } finally {
+    await browser.close();
+  }
+}
+
+// ── 比對 & 更新資料庫，回傳價格異動清單 ──
+async function matchAndUpdate(scrapedProducts, platform) {
+  const db = getDB();
+  const existing = db.prepare('SELECT id, name, base_name, variant, brand FROM products').all();
+
+  // AI 批次解析所有商品名稱（有 GROQ_API_KEY 才跑，否則用 fallback）
+  const validProducts = scrapedProducts.filter(p => p.price);
+  const aiMap = await parseNamesWithAI(validProducts.map(p => p.name));
+
+  const insertPrice = db.prepare(`
+    INSERT INTO price_records (id, product_id, platform, price, original_price, discount_label, in_stock)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
+  `);
+
+  let added = 0, updated = 0;
+  const priceChanges = [];
+  const alertQueue = [];
+  const addedThisRun = new Set(); // 本次新增的商品 id，不對這些觸發價格警示
+
+  db.transaction(() => {
+    for (const item of validProducts) {
+      const parsed   = aiMap.get(item.name);
+      if (!parsed) logger.warn(`[AI解析] 未解析：${item.name.slice(0, 40)}`);
+      const itemBase = parsed?.baseName || item.name;
+      const itemVariant = parsed?.variant || null;
+
+      // 兩階段比對：先比 base_name，再比 variant
+      let best = null, bestScore = 0;
+      for (const ep of existing) {
+        const epBase = ep.base_name || ep.name;
+        const score  = similarity(itemBase, epBase);
+        if (score > bestScore) { bestScore = score; best = ep; }
+      }
+
+      const bestVariant = best ? best.variant : null;
+      const variantMatch = (itemVariant ?? '').toLowerCase() === (bestVariant ?? '').toLowerCase();
+
+      if (bestScore >= 0.75 && best && variantMatch) {
+        const latest = db.prepare(`SELECT price FROM price_records WHERE product_id=? AND platform=? ORDER BY scraped_at DESC LIMIT 1`).get(best.id, platform);
+        if (latest && latest.price !== item.price) {
+          insertPrice.run(uuidv4(), best.id, platform, item.price, item.origPrice ?? null, null);
+          // 本次剛新增的商品不觸發警示（同一爬蟲內重複出現造成的假變動）
+          if (!addedThisRun.has(best.id)) {
+            const diff = item.price - latest.price;
+            const pct  = ((diff / latest.price) * 100).toFixed(1);
+            priceChanges.push(`${item.name.slice(0,25)} $${latest.price}→$${item.price}（${diff>0?'+':''}${pct}%）`);
+            alertQueue.push({ product: { id: best.id, name: best.name, brand: best.brand || '' }, platform, newPrice: item.price, oldPrice: latest.price });
+          }
+          updated++;
+        } else if (!latest) {
+          insertPrice.run(uuidv4(), best.id, platform, item.price, item.origPrice ?? null, null);
+          updated++;
+        }
+        if (item.productUrl) {
+          const existingUrl = db.prepare('SELECT id FROM product_urls WHERE product_id=? AND platform=?').get(best.id, platform);
+          if (existingUrl) {
+            db.prepare('UPDATE product_urls SET url=? WHERE id=?').run(item.productUrl, existingUrl.id);
+          } else {
+            db.prepare('INSERT INTO product_urls (id, product_id, platform, url) VALUES (?,?,?,?)').run(uuidv4(), best.id, platform, item.productUrl);
+          }
+        }
+      } else {
+        const productId = uuidv4();
+        db.prepare(`INSERT INTO products (id, name, base_name, variant, brand, category, emoji, image_url, is_active) VALUES (?,?,?,?,?,'唇膏','💄',?,1)`)
+          .run(productId, item.name, itemBase, itemVariant, parsed?.brand || '', item.imageUrl || null);
+        insertPrice.run(uuidv4(), productId, platform, item.price, item.origPrice ?? null, null);
+        if (item.productUrl) {
+          db.prepare('INSERT INTO product_urls (id, product_id, platform, url) VALUES (?,?,?,?)').run(uuidv4(), productId, platform, item.productUrl);
+        }
+        existing.push({ id: productId, name: item.name, base_name: itemBase, variant: itemVariant });
+        addedThisRun.add(productId);
+        added++;
+      }
+    }
+  })();
+
+  // transaction 完成後再觸發警示（async 不能在 transaction 內）
+  for (const { product, platform: pf, newPrice, oldPrice } of alertQueue) {
+    await AlertService.checkPriceChange(product, pf, newPrice, oldPrice)
+      .catch(err => logger.warn(`[排程] 警示觸發失敗: ${err.message}`));
+  }
+
+  // 自動補救：新插入商品若 base_name 仍等於 name，立刻重跑 GROQ 解析
+  const db2 = getDB();
+  const unresolved = [...addedThisRun].map(id =>
+    db2.prepare('SELECT id, name FROM products WHERE id=? AND base_name=name').get(id)
+  ).filter(Boolean);
+
+  if (unresolved.length > 0) {
+    logger.info(`[補救] 發現 ${unresolved.length} 筆未解析商品，重新送 AI 解析`);
+    const fixMap = await parseNamesWithAI(unresolved.map(r => r.name));
+    const fixStmt = db2.prepare('UPDATE products SET base_name=? WHERE id=?');
+    for (const row of unresolved) {
+      const p = fixMap.get(row.name);
+      if (p?.baseName && p.baseName !== row.name) {
+        fixStmt.run(p.baseName, row.id);
+        logger.info(`[補救] ${row.name.slice(0, 30)} → ${p.baseName}`);
+      }
+    }
+  }
+
+  return { total: scrapedProducts.length, added, updated, priceChanges };
+}
+
+// ═══════════════════════════════════════════════════════
+//  URL 管理 API
+// ═══════════════════════════════════════════════════════
+
+// GET /api/scraper/urls — 取得所有監控網址
+router.get('/urls', (req, res) => {
+  res.json(loadSchedule().urls || []);
+});
+
+// POST /api/scraper/urls — 新增監控網址
+router.post('/urls', (req, res) => {
+  const { url, label } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL 必填' });
+  const platform = detectPlatform(url);
+  if (!platform) return res.status(400).json({ error: '不支援的平台（目前支援屈臣氏、康是美、寶雅）' });
+
+  const s = loadSchedule();
+  const newEntry = {
+    id:       uuidv4(),
+    url,
+    platform,
+    label:    label || `${PLATFORM_LABEL[platform]} ${new Date().toLocaleDateString('zh-TW')}`,
+    enabled:  true,
+    addedAt:  new Date().toISOString(),
+  };
+  s.urls.push(newEntry);
+  saveSchedule(s);
+  applySchedule(s);
+  res.status(201).json(newEntry);
+});
+
+// PATCH /api/scraper/urls/:id — 切換啟用/停用、更新名稱或網址
+router.patch('/urls/:id', (req, res) => {
+  const s = loadSchedule();
+  const entry = s.urls.find(u => u.id === req.params.id);
+  if (!entry) return res.status(404).json({ error: '找不到此 URL' });
+  entry.enabled = req.body.enabled !== undefined ? !!req.body.enabled : !entry.enabled;
+  if (req.body.label !== undefined) entry.label = req.body.label;
+  if (req.body.url !== undefined) {
+    const newPlatform = detectPlatform(req.body.url);
+    if (!newPlatform) return res.status(400).json({ error: '無法辨識平台（支援屈臣氏、康是美、寶雅）' });
+    entry.url = req.body.url;
+    entry.platform = newPlatform;
+  }
+  saveSchedule(s);
+  applySchedule(s);
+  res.json(entry);
+});
+
+// DELETE /api/scraper/urls — 清除全部監控網址
+router.delete('/urls', (req, res) => {
+  const s = loadSchedule();
+  s.urls = [];
+  saveSchedule(s);
+  applySchedule(s);
+  res.json({ ok: true });
+});
+
+// DELETE /api/scraper/urls/:id — 刪除監控網址
+router.delete('/urls/:id', (req, res) => {
+  const s = loadSchedule();
+  const before = s.urls.length;
+  s.urls = s.urls.filter(u => u.id !== req.params.id);
+  if (s.urls.length === before) return res.status(404).json({ error: '找不到此 URL' });
+  saveSchedule(s);
+  applySchedule(s);
+  res.json({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════
+//  排程設定 API
+// ═══════════════════════════════════════════════════════
+
+// GET /api/scraper/schedule
+router.get('/schedule', (req, res) => {
+  const s = loadSchedule();
+  res.json({ enabled: s.enabled, time: s.time, days: s.days, urls: s.urls });
+});
+
+// PUT /api/scraper/schedule
+router.put('/schedule', (req, res) => {
+  const s = loadSchedule();
+  s.enabled = !!req.body.enabled;
+  s.time    = req.body.time  || s.time  || '03:00';
+  s.days    = req.body.days  || s.days  || 'daily';
+  saveSchedule(s);
+  applySchedule(s);
+  res.json({ ok: true, enabled: s.enabled, time: s.time, days: s.days });
+});
+
+// ═══════════════════════════════════════════════════════
+//  手動執行 API
+// ═══════════════════════════════════════════════════════
+
+// POST /api/scraper/url — 指定 URL 立即執行
+router.post('/url', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL 必填' });
+  const platform = detectPlatform(url);
+  if (!platform) return res.status(400).json({ error: '不支援的平台網址' });
+
+  const db    = getDB();
+  const jobId = uuidv4();
+  db.prepare(`INSERT INTO scrape_jobs (id, platform, status, target_url) VALUES (?, ?, 'running', ?)`).run(jobId, platform, url);
+
+  try {
+    const scraped = await scrapeCategoryPage(url, platform);
+    const result  = await matchAndUpdate(scraped, platform);
+    db.prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`)
+      .run(result.total, jobId);
+    res.json(result);
+  } catch (err) {
+    db.prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
+      .run(err.message, jobId);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/scraper/run
+router.post('/run', async (req, res) => {
+  try { res.json(await runScrapeJob('all')); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/scraper/run/:platform
+router.post('/run/:platform', async (req, res) => {
+  const { platform } = req.params;
+  if (!['watsons','cosmed','poya','pchome'].includes(platform))
+    return res.status(400).json({ error: '未知平台' });
+  try { res.json(await runScrapeJob(platform)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── 批次執行所有已啟用的監控網址（背景任務）──
+async function runBatchScrapeJob() {
+  const current = loadSchedule();
+  const enabledUrls = current.urls.filter(u => u.enabled);
+  if (!enabledUrls.length) return { total: 0, results: [] };
+
+  const results = [];
+  const db = getDB();
+
+  // 1. 先為所有任務建立記錄
+  const jobIds = [];
+  for (const item of enabledUrls) {
+    const jobId = uuidv4();
+    db.prepare(`INSERT INTO scrape_jobs (id, platform, status, target_url) VALUES (?, ?, 'running', ?)`).run(jobId, item.platform, item.url);
+    jobIds.push({ id: jobId, ...item });
+  }
+
+  // 2. 逐一執行（目前先循序執行，避免瀏覽器資源衝突，但優化單次執行時間）
+  for (const job of jobIds) {
+    try {
+      const scraped = await scrapeCategoryPage(job.url, job.platform);
+      const result  = await matchAndUpdate(scraped, job.platform);
+      db.prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`)
+        .run(result.total, job.id);
+      results.push({ platform: job.platform, label: job.label, status: 'success', total: result.total, added: result.added, updated: result.updated });
+    } catch (err) {
+      db.prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
+        .run(err.message, job.id);
+      results.push({ platform: job.platform, label: job.label, status: 'failed', error: err.message });
+    }
+  }
+  return { total: enabledUrls.length, success: results.filter(r => r.status === 'success').length, failed: results.filter(r => r.status === 'failed').length, results };
+}
+
+// POST /api/scraper/run-enabled — 啟動批次背景抓取
+router.post('/run-enabled', (req, res) => {
+  const current = loadSchedule();
+  const enabledUrls = current.urls.filter(u => u.enabled);
+  if (!enabledUrls.length) return res.status(400).json({ error: '尚無已啟用的監控網址' });
+
+  // 立即回傳，背景執行
+  runBatchScrapeJob()
+    .then(data => logger.info(`[批次抓取] 完成：成功 ${data.success} / 失敗 ${data.failed}`))
+    .catch(err => logger.error(`[批次抓取] 發生非預期錯誤: ${err.message}`));
+
+  res.json({ message: '批次抓取已啟動，請稍後查看歷史紀錄或狀態', count: enabledUrls.length });
+});
+
+// GET /api/scraper/status
+router.get('/status', (req, res) => {
+  const db = getDB();
+  const running = db.prepare(`SELECT * FROM scrape_jobs WHERE status='running' ORDER BY started_at DESC LIMIT 1`).get();
+  res.json({ status: running ? 'running' : 'idle', currentJob: running || null });
+});
+
+// GET /api/scraper/history
+router.get('/history', (req, res) => {
+  const db = getDB();
+  const { limit = 30 } = req.query;
+  res.json(db.prepare('SELECT * FROM scrape_jobs ORDER BY started_at DESC LIMIT ?').all(parseInt(limit)));
+});
+
+// POST /api/scraper/category/watsons（舊路由保留）
+router.post('/category/watsons', async (req, res) => {
+  const { baseUrl, pages = 9, saveToDb = false } = req.body;
+  const defaultUrl = 'https://www.watsons.com.tw/%E5%8C%96%E5%A6%9D%E5%93%81/%E5%94%87%E8%86%8F/c/10440301?q=:bestSeller';
+  const targetUrl  = (baseUrl || defaultUrl).replace(/&currentPage=\d+$/, '');
+  const WatsonsScraper = require('../scrapers/WatsonsScraper');
+  const scraper = new WatsonsScraper();
+  try {
+    const products = await scraper.scrapeCategory(targetUrl, parseInt(pages));
+    if (saveToDb && products.length > 0) {
+      const db = getDB(); let saved = 0;
+      for (const p of products) {
+        if (!p.productUrl) continue;
+        if (db.prepare('SELECT id FROM product_urls WHERE url=?').get(p.productUrl)) continue;
+        const pid = uuidv4();
+        db.prepare('INSERT INTO products (id,name,brand,category,emoji) VALUES (?,?,?,?,?)').run(pid,p.name,'屈臣氏','makeup','💄');
+        db.prepare('INSERT INTO product_urls (id,product_id,platform,url) VALUES (?,?,?,?)').run(uuidv4(),pid,'watsons',p.productUrl);
+        if (p.price) db.prepare('INSERT INTO price_records (id,product_id,platform,price,original_price) VALUES (?,?,?,?,?)').run(uuidv4(),pid,'watsons',p.price,p.originalPrice||null);
+        saved++;
+      }
+      return res.json({ total: products.length, saved, products });
+    }
+    res.json({ total: products.length, products });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+module.exports = router;

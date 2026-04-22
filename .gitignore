@@ -1,0 +1,25 @@
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Dependencies
+node_modules/
+
+# Database
+server/db/*.sqlite
+server/db/*.sqlite-wal
+server/db/*.sqlite-shm
+
+# Environment variables
+server/.env
+.env
+
+# Scraper schedule (user-specific)
+server/scraper-schedule.json
