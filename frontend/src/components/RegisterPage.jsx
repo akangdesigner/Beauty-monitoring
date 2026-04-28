@@ -1,61 +1,196 @@
 import { useState } from 'react'
 import { api } from '../api'
 
-const PLATFORMS = [
-  {
-    key: 'watsons',
-    name: '屈臣氏',
-    icon: '💧',
-    color: '#00b4d8',
-    placeholder: 'https://www.watsons.com.tw/category/...',
-    hint: '貼上屈臣氏分類頁或搜尋頁網址',
-  },
-  {
-    key: 'cosmed',
-    name: '康是美',
-    icon: '🌿',
-    color: '#52b788',
-    placeholder: 'https://www.cosmed.com.tw/category/...',
-    hint: '貼上康是美分類頁或搜尋頁網址',
-  },
-  {
-    key: 'poya',
-    name: '寶雅',
-    icon: '🛍️',
-    color: '#f4a261',
-    placeholder: 'https://www.poyabuy.com.tw/v2/cms/...',
-    hint: '貼上寶雅分類頁網址',
-  },
-  {
-    key: 'momo',
-    name: 'momo 購物',
-    icon: '🛒',
-    color: '#888',
-    placeholder: '即將推出…',
-    hint: 'momo 平台爬蟲即將推出',
-    disabled: true,
-  },
-]
+/* ── 注入 keyframes ── */
+const INJECT_CSS = `
+@keyframes rp-fadeUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes rp-shimmer {
+  0%   { transform: translateX(-120%) skewX(-20deg); }
+  100% { transform: translateX(220%)  skewX(-20deg); }
+}
+@keyframes rp-gradFlow {
+  0%,100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+@keyframes rp-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes rp-pulseRing {
+  0%,100% { box-shadow: 0 0 0 0 rgba(155,109,202,0.4); }
+  50%     { box-shadow: 0 0 0 12px rgba(155,109,202,0); }
+}
 
+.rp-section {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 18px;
+  padding: 28px;
+  margin-bottom: 18px;
+  animation: rp-fadeUp 0.5s ease both;
+}
+.rp-platform-card {
+  position: relative; overflow: hidden;
+  background: rgba(255,255,255,0.04);
+  border: 1.5px solid rgba(255,255,255,0.09);
+  border-radius: 16px;
+  padding: 22px 14px 18px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  user-select: none;
+}
+.rp-platform-card:not(.rp-disabled):hover {
+  transform: translateY(-3px);
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(155,109,202,0.35);
+}
+.rp-platform-card.rp-disabled { opacity: 0.32; cursor: not-allowed; }
+.rp-platform-card.rp-sel-watsons {
+  border-color: rgba(0,160,227,0.65) !important;
+  background: rgba(0,160,227,0.09) !important;
+  box-shadow: 0 0 28px rgba(0,160,227,0.18), inset 0 0 20px rgba(0,160,227,0.05);
+}
+.rp-platform-card.rp-sel-cosmed {
+  border-color: rgba(244,121,32,0.65) !important;
+  background: rgba(244,121,32,0.09) !important;
+  box-shadow: 0 0 28px rgba(244,121,32,0.18), inset 0 0 20px rgba(244,121,32,0.05);
+}
+.rp-platform-card.rp-sel-poya {
+  border-color: rgba(22,163,74,0.65) !important;
+  background: rgba(22,163,74,0.09) !important;
+  box-shadow: 0 0 28px rgba(22,163,74,0.18), inset 0 0 20px rgba(22,163,74,0.05);
+}
+.rp-input:focus {
+  border-color: rgba(155,109,202,0.55) !important;
+  box-shadow: 0 0 0 3px rgba(155,109,202,0.14), 0 0 14px rgba(155,109,202,0.12) !important;
+}
+.rp-submit {
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, #9b6dca 0%, #c084fc 40%, #d4956a 100%);
+  background-size: 200% 200%;
+  animation: rp-gradFlow 4s ease infinite;
+  color: #fff; border: none; border-radius: 12px;
+  padding: 14px 38px; font-size: 15px; font-weight: 600;
+  cursor: pointer; letter-spacing: 0.04em;
+  transition: transform 0.2s, box-shadow 0.2s;
+  font-family: 'Noto Sans TC', sans-serif;
+}
+.rp-submit::after {
+  content: '';
+  position: absolute; inset-block: 0;
+  width: 45%; left: -50%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent);
+  transform: skewX(-20deg);
+  animation: rp-shimmer 3.5s ease-in-out infinite;
+}
+.rp-submit:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 36px rgba(155,109,202,0.45);
+}
+.rp-submit:disabled { opacity: 0.45; cursor: not-allowed; animation: none; }
+.rp-remove-btn:hover { background: rgba(239,68,68,0.2) !important; }
+.rp-add-url-btn:hover { opacity: 0.8; }
+`
+
+/* ── Platform SVG logos ── */
+function IconWatsons({ size = 38 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 38 38" fill="none">
+      <circle cx="19" cy="19" r="17" fill="url(#wt-bg)" opacity="0.18"/>
+      <circle cx="19" cy="19" r="13" fill="none" stroke="url(#wt-bg)" strokeWidth="1" opacity="0.3"/>
+      <path d="M11.5 14.5l2 9h1.8l2-6.8 2 6.8h1.8l2-9H21l-1.3 6.2-1.9-6.2H16.2l-1.9 6.2-1.3-6.2h-1.5z" fill="url(#wt-bg)"/>
+      <defs><linearGradient id="wt-bg" x1="2" y1="2" x2="36" y2="36" gradientUnits="userSpaceOnUse"><stop stopColor="#38bdf8"/><stop offset="1" stopColor="#0077b6"/></linearGradient></defs>
+    </svg>
+  )
+}
+function IconCosmed({ size = 38 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 38 38" fill="none">
+      <circle cx="19" cy="19" r="17" fill="url(#cm-bg)" opacity="0.18"/>
+      <path d="M25.5 19a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" fill="none" stroke="url(#cm-bg)" strokeWidth="1.2" opacity="0.4"/>
+      <path d="M19 13v12M13 19h12" stroke="url(#cm-bg)" strokeWidth="2.2" strokeLinecap="round"/>
+      <defs><linearGradient id="cm-bg" x1="2" y1="2" x2="36" y2="36" gradientUnits="userSpaceOnUse"><stop stopColor="#fb923c"/><stop offset="1" stopColor="#e63946"/></linearGradient></defs>
+    </svg>
+  )
+}
+function IconPoya({ size = 38 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 38 38" fill="none">
+      <circle cx="19" cy="19" r="17" fill="url(#py-bg)" opacity="0.18"/>
+      <path d="M14 12h10l2.5 6.5H11.5L14 12z" fill="none" stroke="url(#py-bg)" strokeWidth="1.4" strokeLinejoin="round" opacity="0.5"/>
+      <path d="M10.5 18.5l1.8 8h15.4l1.8-8" stroke="url(#py-bg)" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+      <circle cx="15" cy="27.5" r="1.8" fill="url(#py-bg)"/>
+      <circle cx="23" cy="27.5" r="1.8" fill="url(#py-bg)"/>
+      <defs><linearGradient id="py-bg" x1="2" y1="2" x2="36" y2="36" gradientUnits="userSpaceOnUse"><stop stopColor="#4ade80"/><stop offset="1" stopColor="#16a34a"/></linearGradient></defs>
+    </svg>
+  )
+}
+function IconMomo({ size = 38 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 38 38" fill="none">
+      <circle cx="19" cy="19" r="17" fill="#444" opacity="0.12"/>
+      <text x="19" y="21" textAnchor="middle" fontSize="9" fontWeight="500" fill="#555" fontFamily="DM Mono, monospace" letterSpacing="0.05em">momo</text>
+    </svg>
+  )
+}
+
+const PLATFORMS = [
+  { key: 'watsons', name: '屈臣氏',   color: '#00a0e3', Icon: IconWatsons, placeholder: 'https://www.watsons.com.tw/category/...', hint: '貼上屈臣氏分類頁或搜尋頁網址' },
+  { key: 'cosmed',  name: '康是美',   color: '#f47920', Icon: IconCosmed,  placeholder: 'https://www.cosmed.com.tw/category/...', hint: '貼上康是美分類頁或搜尋頁網址' },
+  { key: 'poya',    name: '寶雅',     color: '#16a34a', Icon: IconPoya,    placeholder: 'https://www.poyabuy.com.tw/v2/cms/...', hint: '貼上寶雅分類頁網址' },
+  { key: 'momo',    name: 'momo',     color: '#666',    Icon: IconMomo,    placeholder: '即將推出…', hint: 'momo 平台爬蟲即將推出', disabled: true },
+]
 const DAYS_OPTIONS = [
   { value: 'daily',    label: '每天' },
   { value: 'weekdays', label: '週一至週五' },
   { value: 'weekends', label: '週六、週日' },
 ]
 
-export default function RegisterPage({ isOnline, toast }) {
-  const [selected, setSelected]   = useState([])
-  const [urls, setUrls]           = useState({})
-  const [lineUid, setLineUid]     = useState('')
+function StepBadge({ n, delay = 0 }) {
+  return (
+    <span style={{
+      width: 28, height: 28, borderRadius: '50%',
+      background: 'linear-gradient(135deg, #9b6dca, #d4956a)',
+      color: '#fff', fontSize: 12, fontWeight: 700,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0, boxShadow: '0 2px 10px rgba(155,109,202,0.45)',
+      animationDelay: `${delay}ms`,
+    }}>{n}</span>
+  )
+}
 
-  // 排程設定
+function MonoLabel({ children }) {
+  return (
+    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '0.22em', color: 'var(--amethyst)', textTransform: 'uppercase', marginBottom: 8 }}>
+      {children}
+    </div>
+  )
+}
+
+const INPUT_BASE = {
+  width: '100%', background: 'rgba(255,255,255,0.055)',
+  border: '1px solid rgba(255,255,255,0.1)',
+  borderRadius: 10, padding: '11px 14px',
+  color: 'var(--text-primary)', fontSize: 13,
+  outline: 'none', boxSizing: 'border-box',
+  transition: 'border-color 0.2s, box-shadow 0.2s',
+  fontFamily: "'Noto Sans TC', sans-serif",
+}
+
+/* ──────────────────────────────── */
+export default function RegisterPage({ isOnline, toast }) {
+  const [selected, setSelected]         = useState([])
+  const [urls, setUrls]                 = useState({})
+  const [lineUid, setLineUid]           = useState('')
   const [schedEnabled, setSchedEnabled] = useState(false)
   const [schedTime, setSchedTime]       = useState('08:00')
   const [schedDays, setSchedDays]       = useState('daily')
-
-  const [loading, setLoading] = useState(false)
-  const [done, setDone]       = useState(false)
-  // 自有品牌
+  const [loading, setLoading]           = useState(false)
+  const [done, setDone]                 = useState(false)
   const [ownBrandsInput, setOwnBrandsInput] = useState('')
 
   function togglePlatform(key, disabled) {
@@ -79,14 +214,9 @@ export default function RegisterPage({ isOnline, toast }) {
       return { ...prev, [platformKey]: list }
     })
   }
-
   function addUrl(platformKey) {
-    setUrls(prev => ({
-      ...prev,
-      [platformKey]: [...(prev[platformKey] || ['']), ''],
-    }))
+    setUrls(prev => ({ ...prev, [platformKey]: [...(prev[platformKey] || ['']), ''] }))
   }
-
   function removeUrl(platformKey, idx) {
     setUrls(prev => {
       const list = prev[platformKey].filter((_, i) => i !== idx)
@@ -98,47 +228,29 @@ export default function RegisterPage({ isOnline, toast }) {
     e.preventDefault()
     if (!isOnline) { toast('⚠ 後端離線，請稍後再試', 'error'); return }
     if (selected.length === 0) { toast('請至少選擇一個平台', 'error'); return }
-
-    const confirmed = window.confirm(
-      '⚠ 初始設定將會清除所有現有的監控商品與爬蟲網址，確定要繼續嗎？'
-    )
+    const confirmed = window.confirm('⚠ 初始設定將會清除所有現有的監控商品與爬蟲網址，確定要繼續嗎？')
     if (!confirmed) return
 
-    // 收集所有非空網址
     const entries = []
     for (const key of selected) {
-      const platform = PLATFORMS.find(p => p.key === key)
+      const p = PLATFORMS.find(pl => pl.key === key)
       const list = (urls[key] || []).map(u => u.trim()).filter(Boolean)
-      list.forEach((url, i) => {
-        entries.push({ url, label: `${platform.name} 分類頁${list.length > 1 ? ` ${i + 1}` : ''}` })
-      })
+      list.forEach((url, i) => entries.push({ url, label: `${p.name} 分類頁${list.length > 1 ? ` ${i + 1}` : ''}` }))
     }
 
     setLoading(true)
     try {
-      // 1. 清除舊資料
       await api.clearAllScraperUrls()
       await api.deleteAllProducts()
       await api.deleteAllClientProducts()
-
-      // 2. 新增爬蟲網址
-      for (const { url, label } of entries) {
-        await api.addScraperUrl(url, label)
-      }
-
-      // 3. 儲存排程設定
+      for (const { url, label } of entries) await api.addScraperUrl(url, label)
       await api.setSchedule({ enabled: schedEnabled, time: schedTime, days: schedDays })
-
-      // 4. 儲存自有品牌
       const brands = ownBrandsInput.split(/[,，\n]/).map(b => b.trim()).filter(Boolean)
       if (brands.length > 0) await api.setOwnBrands(brands)
-
-      // 5. 儲存 LINE UID（若有填）
       if (lineUid.trim()) {
         const current = await api.getLineSettings().catch(() => ({}))
         await api.saveLineSettings({ ...current, user_id: lineUid.trim() })
       }
-
       setDone(true)
       toast(`✅ 設定完成！共新增 ${entries.length} 筆網址`, 'success')
     } catch (err) {
@@ -148,326 +260,345 @@ export default function RegisterPage({ isOnline, toast }) {
     }
   }
 
+  /* ── Success Screen ── */
   if (done) {
     return (
-      <div style={styles.successWrap}>
-        <div style={styles.successIcon}>✅</div>
-        <h2 style={styles.successTitle}>設定完成！</h2>
-        <p style={styles.successSub}>
-          已清除舊資料並儲存新設定。<br />
-          可至「爬蟲排程」頁面立即執行爬蟲，開始收集價格資料。
-        </p>
-        <button style={styles.btnPrimary} onClick={() => { setDone(false); setSelected([]); setUrls({}); setLineUid(''); setSchedEnabled(false) }}>
-          重新設定
-        </button>
-      </div>
+      <>
+        <style dangerouslySetInnerHTML={{ __html: INJECT_CSS }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '78vh', padding: '0 24px' }}>
+          <div style={{ textAlign: 'center', maxWidth: 460, animation: 'rp-fadeUp 0.6s ease both' }}>
+            <div style={{
+              width: 96, height: 96, margin: '0 auto 28px',
+              borderRadius: '50%',
+              background: 'radial-gradient(circle at 40% 40%, rgba(155,109,202,0.25), rgba(212,149,106,0.15))',
+              border: '1.5px solid rgba(155,109,202,0.35)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              animation: 'rp-pulseRing 2.5s ease-in-out infinite',
+            }}>
+              <svg width="46" height="46" viewBox="0 0 46 46" fill="none">
+                <circle cx="23" cy="23" r="18" stroke="url(#sc-g)" strokeWidth="1.5" fill="none" opacity="0.4"/>
+                <path d="M14 23l7 7 11-12" stroke="url(#sc-g)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+                <defs>
+                  <linearGradient id="sc-g" x1="5" y1="5" x2="41" y2="41" gradientUnits="userSpaceOnUse">
+                    <stop stopColor="#c084fc"/><stop offset="1" stopColor="#d4956a"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '0.25em', color: 'var(--amethyst)', textTransform: 'uppercase', marginBottom: 14 }}>完成</div>
+            <h2 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 40, fontWeight: 300, color: 'var(--text-primary)', margin: '0 0 16px', letterSpacing: '-0.02em', lineHeight: 1 }}>
+              設定已儲存
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 15, lineHeight: 1.8, marginBottom: 36 }}>
+              已清除舊資料並套用新設定。<br />
+              前往「爬蟲排程」頁面立即執行，開始收集價格資料。
+            </p>
+            <button
+              className="rp-submit"
+              onClick={() => { setDone(false); setSelected([]); setUrls({}); setLineUid(''); setSchedEnabled(false) }}
+            >重新設定</button>
+          </div>
+        </div>
+      </>
     )
   }
 
   const stepBase = selected.length > 0 ? 1 : 0
 
   return (
-    <div style={styles.wrap}>
-      <div style={styles.header}>
-        <h1 style={styles.title}>初始設定</h1>
-        <p style={styles.sub}>選擇最多 3 個要追蹤的電商平台，填入分類頁網址，並設定排程與 LINE 推播。</p>
-      </div>
+    <>
+      <style dangerouslySetInnerHTML={{ __html: INJECT_CSS }} />
+      <div style={{ padding: '36px 24px 80px', maxWidth: 820, margin: '0 auto' }}>
 
-      {/* 警告提示 */}
-      <div style={styles.warning}>
-        ⚠ 送出後將清除所有現有的監控商品與爬蟲網址，請確認後再執行。
-      </div>
-
-      <form onSubmit={handleSubmit}>
-
-        {/* Step 1：平台選擇 */}
-        <section style={styles.section}>
-          <div style={styles.sectionTitle}>
-            <span style={styles.step}>1</span> 選擇監控平台
-            <span style={styles.limit}>（最多選 3 個，已選 {selected.length} / 3）</span>
+        {/* ── Header ── */}
+        <div style={{ marginBottom: 36 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '0.28em', color: 'var(--amethyst)', textTransform: 'uppercase', marginBottom: 12 }}>
+            初始化 · SETUP
           </div>
-          <div style={styles.platformGrid}>
-            {PLATFORMS.map(p => {
-              const isSelected = selected.includes(p.key)
-              return (
-                <div
-                  key={p.key}
-                  style={{
-                    ...styles.platformCard,
-                    ...(isSelected ? { ...styles.platformCardSelected, borderColor: p.color } : {}),
-                    ...(p.disabled ? styles.platformCardDisabled : {}),
-                  }}
-                  onClick={() => togglePlatform(p.key, p.disabled)}
-                >
-                  <div style={styles.platformIcon}>{p.icon}</div>
-                  <div style={styles.platformName}>{p.name}</div>
-                  {p.disabled && <div style={styles.comingSoon}>即將推出</div>}
-                  {isSelected && <div style={{ ...styles.checkmark, color: p.color }}>✓</div>}
-                </div>
-              )
-            })}
-          </div>
-        </section>
+          <h1 style={{
+            fontFamily: "'Cormorant Garamond', serif",
+            fontSize: 46, fontWeight: 300, letterSpacing: '-0.025em', lineHeight: 1.05,
+            background: 'linear-gradient(135deg, var(--text-primary) 0%, var(--rose-light) 45%, var(--amethyst-light) 100%)',
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+            margin: '0 0 14px',
+          }}>
+            競品監控設定
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 15, lineHeight: 1.7, margin: 0, maxWidth: 560 }}>
+            選擇最多 3 個要追蹤的電商平台，填入分類頁網址，並設定排程與 LINE 推播。
+          </p>
+        </div>
 
-        {/* Step 2：爬蟲網址（選填，多筆） */}
-        {selected.length > 0 && (
-          <section style={styles.section}>
-            <div style={styles.sectionTitle}>
-              <span style={styles.step}>2</span> 填入分類頁網址
-              <span style={styles.limit}>（選填，可新增多筆）</span>
+        {/* ── Warning Banner ── */}
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+          background: 'linear-gradient(135deg, rgba(251,191,36,0.07), rgba(239,68,68,0.05))',
+          border: '1px solid rgba(251,191,36,0.22)',
+          borderLeft: '3px solid #fbbf24',
+          borderRadius: '0 12px 12px 0',
+          padding: '14px 18px', marginBottom: 28,
+        }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0, marginTop: 1 }}>
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="#fbbf24" strokeWidth="2" strokeLinejoin="round"/>
+            <line x1="12" y1="9" x2="12" y2="13" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round"/>
+            <circle cx="12" cy="17" r="0.5" fill="#fbbf24" stroke="#fbbf24" strokeWidth="1.5"/>
+          </svg>
+          <p style={{ color: '#fde68a', fontSize: 13, lineHeight: 1.65, margin: 0 }}>
+            送出後將<strong style={{ color: '#fbbf24' }}>清除所有現有的監控商品與爬蟲網址</strong>，請確認後再執行。
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+
+          {/* ── Step 1: Platforms ── */}
+          <div className="rp-section" style={{ animationDelay: '0ms' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+              <StepBadge n={1} />
+              <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>選擇監控平台</span>
+              <div style={{
+                marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6,
+                background: 'rgba(155,109,202,0.12)', border: '1px solid rgba(155,109,202,0.22)',
+                borderRadius: 20, padding: '4px 12px',
+              }}>
+                <span style={{ fontSize: 12, color: 'var(--amethyst-light)', fontFamily: "'DM Mono', monospace" }}>
+                  {selected.length} / 3
+                </span>
+              </div>
             </div>
-            <div style={styles.urlList}>
-              {selected.map(key => {
-                const p = PLATFORMS.find(pl => pl.key === key)
-                const list = urls[key] || ['']
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+              {PLATFORMS.map(p => {
+                const isSelected = selected.includes(p.key)
                 return (
-                  <div key={key} style={styles.platformUrlBlock}>
-                    <div style={{ ...styles.urlPlatformLabel, color: p.color }}>
-                      {p.icon} {p.name}
+                  <div
+                    key={p.key}
+                    className={`rp-platform-card${isSelected ? ` rp-sel-${p.key}` : ''}${p.disabled ? ' rp-disabled' : ''}`}
+                    onClick={() => togglePlatform(p.key, p.disabled)}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+                      <p.Icon size={38} />
                     </div>
-                    <p style={styles.hint}>{p.hint}</p>
-                    {list.map((val, idx) => (
-                      <div key={idx} style={styles.urlInputRow}>
-                        <input
-                          style={styles.input}
-                          type="url"
-                          placeholder={p.placeholder}
-                          value={val}
-                          onChange={e => setUrl(key, idx, e.target.value)}
-                        />
-                        {list.length > 1 && (
-                          <button
-                            type="button"
-                            style={styles.btnRemove}
-                            onClick={() => removeUrl(key, idx)}
-                            title="移除此網址"
-                          >✕</button>
-                        )}
+                    <div style={{ fontSize: 13, fontWeight: 600, color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)', transition: 'color 0.2s' }}>
+                      {p.name}
+                    </div>
+                    {p.disabled && (
+                      <div style={{ marginTop: 5, fontSize: 9, color: 'var(--text-muted)', fontFamily: "'DM Mono', monospace", letterSpacing: '0.12em' }}>
+                        SOON
                       </div>
-                    ))}
-                    <button
-                      type="button"
-                      style={styles.btnAddUrl}
-                      onClick={() => addUrl(key)}
-                    >
-                      ＋ 新增一筆 {p.name} 網址
-                    </button>
+                    )}
+                    {isSelected && (
+                      <div style={{
+                        position: 'absolute', top: 9, right: 9,
+                        width: 20, height: 20, borderRadius: '50%',
+                        background: p.color, color: '#fff', fontSize: 11, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: `0 2px 8px ${p.color}70`,
+                      }}>✓</div>
+                    )}
                   </div>
                 )
               })}
             </div>
-          </section>
-        )}
-
-        {/* Step 3：排程設定 */}
-        <section style={styles.section}>
-          <div style={styles.sectionTitle}>
-            <span style={styles.step}>{2 + stepBase}</span> 自動排程爬蟲
           </div>
 
-          {/* 開關 */}
-          <div style={styles.toggleRow} onClick={() => setSchedEnabled(v => !v)}>
-            <div style={{ ...styles.toggle, ...(schedEnabled ? styles.toggleOn : {}) }}>
-              <div style={{ ...styles.toggleThumb, ...(schedEnabled ? styles.toggleThumbOn : {}) }} />
-            </div>
-            <span style={styles.toggleLabel}>
-              {schedEnabled ? '已開啟自動排程' : '不需要排程（手動執行即可）'}
-            </span>
-          </div>
-
-          {schedEnabled && (
-            <div style={styles.schedGrid}>
-              <div style={styles.schedField}>
-                <label style={styles.urlPlatformLabel}>執行時間</label>
-                <input
-                  type="time"
-                  style={styles.input}
-                  value={schedTime}
-                  onChange={e => setSchedTime(e.target.value)}
-                />
+          {/* ── Step 2: URLs ── */}
+          {selected.length > 0 && (
+            <div className="rp-section" style={{ animationDelay: '60ms' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+                <StepBadge n={2} delay={60} />
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>填入分類頁網址</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>選填，可新增多筆</div>
+                </div>
               </div>
-              <div style={styles.schedField}>
-                <label style={styles.urlPlatformLabel}>執行頻率</label>
-                <select
-                  style={{ ...styles.input, cursor: 'pointer' }}
-                  value={schedDays}
-                  onChange={e => setSchedDays(e.target.value)}
-                >
-                  {DAYS_OPTIONS.map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+                {selected.map(key => {
+                  const p = PLATFORMS.find(pl => pl.key === key)
+                  const list = urls[key] || ['']
+                  return (
+                    <div key={key}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <p.Icon size={18} />
+                        <span style={{ fontSize: 13, fontWeight: 700, color: p.color, letterSpacing: '0.02em' }}>{p.name}</span>
+                      </div>
+                      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>{p.hint}</p>
+                      {list.map((val, idx) => (
+                        <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                          <input
+                            className="rp-input"
+                            style={INPUT_BASE}
+                            type="url"
+                            placeholder={p.placeholder}
+                            value={val}
+                            onChange={e => setUrl(key, idx, e.target.value)}
+                          />
+                          {list.length > 1 && (
+                            <button
+                              type="button"
+                              className="rp-remove-btn"
+                              style={{
+                                flexShrink: 0, background: 'rgba(239,68,68,0.1)',
+                                border: '1px solid rgba(239,68,68,0.22)', borderRadius: 8,
+                                color: '#f87171', padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                                transition: 'background 0.2s',
+                              }}
+                              onClick={() => removeUrl(key, idx)}
+                            >✕</button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="rp-add-url-btn"
+                        style={{
+                          background: 'transparent',
+                          border: `1px dashed ${p.color}55`,
+                          borderRadius: 8, color: `${p.color}bb`,
+                          padding: '7px 14px', cursor: 'pointer', fontSize: 12,
+                          marginTop: 2, transition: 'opacity 0.2s',
+                          fontFamily: "'DM Mono', monospace", letterSpacing: '0.05em',
+                        }}
+                        onClick={() => addUrl(key)}
+                      >
+                        + {p.name} 新增一筆網址
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
-        </section>
 
-        {/* Step 4：自有品牌 */}
-        <section style={styles.section}>
-          <div style={styles.sectionTitle}>
-            <span style={styles.step}>{3 + stepBase}</span> 自有品牌設定
-            <span style={styles.limit}>（選填）</span>
+          {/* ── Step 3: Schedule ── */}
+          <div className="rp-section" style={{ animationDelay: '120ms' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+              <StepBadge n={2 + stepBase} delay={120} />
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>自動排程爬蟲</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>設定定時自動執行頻率</div>
+              </div>
+            </div>
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 14,
+                cursor: 'pointer', userSelect: 'none',
+                marginBottom: schedEnabled ? 20 : 0,
+                padding: '14px 16px', borderRadius: 12,
+                background: schedEnabled ? 'rgba(155,109,202,0.07)' : 'rgba(255,255,255,0.025)',
+                border: `1px solid ${schedEnabled ? 'rgba(155,109,202,0.28)' : 'rgba(255,255,255,0.07)'}`,
+                transition: 'all 0.3s',
+              }}
+              onClick={() => setSchedEnabled(v => !v)}
+            >
+              <div style={{
+                width: 48, height: 26, borderRadius: 13, flexShrink: 0, position: 'relative',
+                background: schedEnabled ? 'linear-gradient(135deg, #9b6dca, #d4956a)' : 'rgba(255,255,255,0.1)',
+                transition: 'background 0.3s',
+                boxShadow: schedEnabled ? '0 2px 12px rgba(155,109,202,0.4)' : 'none',
+              }}>
+                <div style={{
+                  position: 'absolute', top: 4,
+                  left: schedEnabled ? 26 : 4,
+                  width: 18, height: 18, borderRadius: '50%',
+                  background: '#fff', transition: 'left 0.3s cubic-bezier(.4,0,.2,1)',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+                }}/>
+              </div>
+              <div>
+                <div style={{ fontSize: 14, color: 'var(--text-primary)', fontWeight: 500 }}>
+                  {schedEnabled ? '已開啟自動排程' : '不需要排程'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  {schedEnabled ? '每天定時自動爬取' : '手動執行即可'}
+                </div>
+              </div>
+            </div>
+            {schedEnabled && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                {[
+                  {
+                    label: '執行時間',
+                    node: <input type="time" className="rp-input" style={{ ...INPUT_BASE }} value={schedTime} onChange={e => setSchedTime(e.target.value)} />,
+                  },
+                  {
+                    label: '執行頻率',
+                    node: (
+                      <select className="rp-input" style={{ ...INPUT_BASE, cursor: 'pointer' }} value={schedDays} onChange={e => setSchedDays(e.target.value)}>
+                        {DAYS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    ),
+                  },
+                ].map(({ label, node }) => (
+                  <div key={label}><MonoLabel>{label}</MonoLabel>{node}</div>
+                ))}
+              </div>
+            )}
           </div>
-          <label style={styles.urlPlatformLabel}>品牌名稱（多個請用逗號或換行分隔）</label>
-          <textarea
-            style={{ ...styles.input, marginTop: 8, height: 80, resize: 'vertical', fontFamily: 'inherit' }}
-            placeholder="例如：LANEIGE, 蘭芝, ettusais"
-            value={ownBrandsInput}
-            onChange={e => setOwnBrandsInput(e.target.value)}
-          />
-          <p style={{ ...styles.hint, marginTop: 6 }}>
-            填入後，儀表板將顯示你的品牌商品售價，方便與競品比較。
-          </p>
-        </section>
 
-        {/* Step 5：LINE UID */}
-        <section style={styles.section}>
-          <div style={styles.sectionTitle}>
-            <span style={styles.step}>{4 + stepBase}</span> LINE 推播設定
-            <span style={styles.limit}>（選填）</span>
+          {/* ── Step 4: Own brands ── */}
+          <div className="rp-section" style={{ animationDelay: '180ms' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+              <StepBadge n={3 + stepBase} delay={180} />
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>自有品牌設定</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>選填，用於儀表板比價基準</div>
+              </div>
+            </div>
+            <MonoLabel>品牌名稱</MonoLabel>
+            <textarea
+              className="rp-input"
+              style={{ ...INPUT_BASE, height: 88, resize: 'vertical' }}
+              placeholder="例如：LANEIGE, 蘭芝, ettusais（多個請用逗號或換行分隔）"
+              value={ownBrandsInput}
+              onChange={e => setOwnBrandsInput(e.target.value)}
+            />
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.65 }}>
+              填入後，儀表板將顯示自有品牌售價，方便與競品比較。
+            </p>
           </div>
-          <label style={styles.urlPlatformLabel}>LINE User ID（UID）</label>
-          <input
-            style={{ ...styles.input, marginTop: 8 }}
-            type="text"
-            placeholder="U1234567890abcdef..."
-            value={lineUid}
-            onChange={e => setLineUid(e.target.value)}
-          />
-          <p style={{ ...styles.hint, marginTop: 6 }}>
-            填入後，降價警示與每日早報將推送至你的 LINE。
-          </p>
-        </section>
 
-        <div style={styles.footer}>
-          <button
-            type="submit"
-            style={{ ...styles.btnPrimary, ...(loading ? styles.btnLoading : {}) }}
-            disabled={loading || selected.length === 0}
-          >
-            {loading ? '設定中…' : '完成設定 →'}
-          </button>
-        </div>
-      </form>
-    </div>
+          {/* ── Step 5: LINE ── */}
+          <div className="rp-section" style={{ animationDelay: '240ms' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+              <StepBadge n={4 + stepBase} delay={240} />
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>LINE 推播設定</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>選填，降價警示即時推播</div>
+              </div>
+            </div>
+            <MonoLabel>LINE User ID</MonoLabel>
+            <input
+              className="rp-input"
+              style={INPUT_BASE}
+              type="text"
+              placeholder="U1234567890abcdef…"
+              value={lineUid}
+              onChange={e => setLineUid(e.target.value)}
+            />
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.65 }}>
+              填入後，降價警示與每日早報將推送至你的 LINE。
+            </p>
+          </div>
+
+          {/* ── Submit ── */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 8, gap: 14, alignItems: 'center' }}>
+            {selected.length === 0 && (
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>請先選擇至少一個平台</span>
+            )}
+            <button type="submit" className="rp-submit" disabled={loading || selected.length === 0}>
+              {loading ? (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ animation: 'rp-spin 0.9s linear infinite' }}>
+                    <circle cx="12" cy="12" r="9" stroke="rgba(255,255,255,0.3)" strokeWidth="3"/>
+                    <path d="M12 3a9 9 0 0 1 9 9" stroke="white" strokeWidth="3" strokeLinecap="round"/>
+                  </svg>
+                  設定中…
+                </span>
+              ) : '完成設定 →'}
+            </button>
+          </div>
+
+        </form>
+      </div>
+    </>
   )
-}
-
-const styles = {
-  wrap: { padding: '32px 16px' },
-  header: { marginBottom: 20 },
-  title: { fontSize: 28, fontWeight: 700, color: '#e2e8f0', margin: '0 0 8px' },
-  sub: { color: '#94a3b8', fontSize: 15, margin: 0 },
-  warning: {
-    background: 'rgba(234,179,8,0.1)',
-    border: '1px solid rgba(234,179,8,0.3)',
-    borderRadius: 10,
-    padding: '12px 16px',
-    color: '#fde68a',
-    fontSize: 13,
-    marginBottom: 20,
-  },
-  section: {
-    background: 'rgba(255,255,255,0.04)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    padding: '24px 24px 20px',
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontSize: 15, fontWeight: 600, color: '#cbd5e1',
-    marginBottom: 18, display: 'flex', alignItems: 'center', gap: 10,
-  },
-  step: {
-    width: 26, height: 26, borderRadius: '50%',
-    background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-    color: '#fff', fontSize: 13, fontWeight: 700,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  },
-  limit: { fontSize: 13, color: '#64748b', fontWeight: 400 },
-  platformGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-    gap: 12,
-  },
-  platformCard: {
-    position: 'relative',
-    background: 'rgba(255,255,255,0.05)',
-    border: '2px solid rgba(255,255,255,0.1)',
-    borderRadius: 12, padding: '20px 16px',
-    textAlign: 'center', cursor: 'pointer',
-    transition: 'all .2s', userSelect: 'none',
-  },
-  platformCardSelected: {
-    background: 'rgba(99,102,241,0.12)',
-    boxShadow: '0 0 0 1px rgba(99,102,241,0.3)',
-  },
-  platformCardDisabled: { opacity: 0.4, cursor: 'not-allowed' },
-  platformIcon: { fontSize: 32, marginBottom: 8 },
-  platformName: { fontSize: 14, fontWeight: 600, color: '#e2e8f0' },
-  comingSoon: { marginTop: 6, fontSize: 11, color: '#64748b' },
-  checkmark: { position: 'absolute', top: 8, right: 10, fontSize: 18, fontWeight: 700 },
-  urlList: { display: 'flex', flexDirection: 'column', gap: 24 },
-  platformUrlBlock: { display: 'flex', flexDirection: 'column', gap: 0 },
-  urlPlatformLabel: { fontSize: 14, fontWeight: 600, color: '#94a3b8', marginBottom: 4 },
-  hint: { margin: '0 0 10px', fontSize: 12, color: '#475569' },
-  urlInputRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
-  input: {
-    flex: 1,
-    background: 'rgba(255,255,255,0.07)',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 8, padding: '10px 14px',
-    color: '#e2e8f0', fontSize: 14, outline: 'none',
-    width: '100%', boxSizing: 'border-box',
-  },
-  btnRemove: {
-    flexShrink: 0,
-    background: 'rgba(239,68,68,0.15)',
-    border: '1px solid rgba(239,68,68,0.3)',
-    borderRadius: 6, color: '#f87171',
-    padding: '6px 10px', cursor: 'pointer', fontSize: 13,
-  },
-  btnAddUrl: {
-    alignSelf: 'flex-start',
-    background: 'rgba(99,102,241,0.1)',
-    border: '1px dashed rgba(99,102,241,0.4)',
-    borderRadius: 8, color: '#a5b4fc',
-    padding: '7px 14px', cursor: 'pointer', fontSize: 13,
-    marginTop: 2,
-  },
-  // 排程開關
-  toggleRow: {
-    display: 'flex', alignItems: 'center', gap: 12,
-    cursor: 'pointer', userSelect: 'none', marginBottom: 18,
-  },
-  toggle: {
-    width: 44, height: 24, borderRadius: 12,
-    background: 'rgba(255,255,255,0.12)',
-    position: 'relative', transition: 'background .2s', flexShrink: 0,
-  },
-  toggleOn: { background: '#6366f1' },
-  toggleThumb: {
-    position: 'absolute', top: 3, left: 3,
-    width: 18, height: 18, borderRadius: '50%',
-    background: '#fff', transition: 'left .2s',
-  },
-  toggleThumbOn: { left: 23 },
-  toggleLabel: { fontSize: 14, color: '#cbd5e1' },
-  schedGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 16,
-  },
-  schedField: { display: 'flex', flexDirection: 'column', gap: 8 },
-  footer: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 },
-  btnPrimary: {
-    background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
-    color: '#fff', border: 'none', borderRadius: 10,
-    padding: '12px 28px', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-  },
-  btnLoading: { opacity: 0.6, cursor: 'not-allowed' },
-  successWrap: { maxWidth: 480, margin: '80px auto', textAlign: 'center', padding: '0 16px' },
-  successIcon: { fontSize: 64, marginBottom: 20 },
-  successTitle: { fontSize: 28, fontWeight: 700, color: '#e2e8f0', margin: '0 0 12px' },
-  successSub: { color: '#94a3b8', fontSize: 15, lineHeight: 1.7, marginBottom: 32 },
 }

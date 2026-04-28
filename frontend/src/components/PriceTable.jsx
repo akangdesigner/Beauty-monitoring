@@ -10,8 +10,7 @@ function PriceCell({ pl, isMin, isMax }) {
   const pct = pl.prevPrice && pl.price !== pl.prevPrice
     ? ((pl.price - pl.prevPrice) / pl.prevPrice * 100).toFixed(1)
     : null
-  const hasOrig = pl.originalPrice && pl.originalPrice > pl.price
-  const priceLabel = `NT$${pl.price.toLocaleString()}${hasOrig ? `（原${pl.originalPrice.toLocaleString()}）` : ''}`
+  const priceLabel = `NT$${pl.price.toLocaleString()}`
   return (
     <td className="price-cell">
       {pl.productUrl ? (
@@ -120,13 +119,36 @@ function MultiSelectDropdown({ label, options, selected, onChange }) {
   )
 }
 
+function stripSpec(name) {
+  return (name || '').replace(/[\d.]+\s*(ml|l(?![a-z])|g(?![a-z])|mg|kg|oz|抽|片|包|入|顆|條)\s*$/i, '').trim()
+}
+
+function getMinPrice(items) {
+  const prices = ['watsons','cosmed','poya'].flatMap(pf => items.map(p => p[pf]?.price).filter(Boolean))
+  return prices.length ? Math.min(...prices) : null
+}
+
 // 把同 base_name 的商品合併成一列（取各平台最低價）
+// 額外規則：有規格的（如「3CE唇膏3g」）若有對應無規格版本（「3CE唇膏」）且最低價相同，視為同款合併
 function groupProducts(products) {
+  // Step 1: 精確 base_name 分組
   const map = new Map()
   for (const p of products) {
     const key = p.base_name || p.name || p.id
     if (!map.has(key)) map.set(key, [])
     map.get(key).push(p)
+  }
+
+  // Step 2: 無規格 → 有規格合併（同價才合併）
+  for (const specKey of [...map.keys()]) {
+    const noSpecKey = stripSpec(specKey)
+    if (noSpecKey === specKey || !map.has(noSpecKey)) continue
+    const specMin   = getMinPrice(map.get(specKey))
+    const noSpecMin = getMinPrice(map.get(noSpecKey))
+    if (specMin !== null && noSpecMin !== null && specMin === noSpecMin) {
+      map.set(specKey, [...map.get(specKey), ...map.get(noSpecKey)])
+      map.delete(noSpecKey)
+    }
   }
 
   return [...map.entries()].map(([key, items]) => {
@@ -141,7 +163,6 @@ function groupProducts(products) {
       merged[pf] = best
     }
     merged.variantCount = items.length
-
     return { key, rep, merged }
   })
 }

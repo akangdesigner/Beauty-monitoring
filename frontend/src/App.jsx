@@ -15,6 +15,7 @@ import ProductsPage   from './components/ProductsPage'
 import AddProductModal from './components/AddProductModal'
 import RegisterPage    from './components/RegisterPage'
 import GuidePage       from './components/GuidePage'
+import SearchPage      from './components/SearchPage'
 
 const DEFAULT_LOG = []
 
@@ -170,7 +171,9 @@ export default function App() {
         <Header />
 
         <main className="main">
-          {activeNav === 'scraper' ? (
+          {activeNav === 'search' ? (
+            <SearchPage isOnline={isOnline} toast={toast} />
+          ) : activeNav === 'scraper' ? (
             <ScraperPage isOnline={isOnline} toast={toast} />
           ) : activeNav === 'products' ? (
             <ProductsPage isOnline={isOnline} toast={toast} />

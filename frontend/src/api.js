@@ -51,6 +51,7 @@ export const api = {
   deleteAllClientProducts: ()      => apiFetch('/api/my-products/all', { method: 'DELETE' }),
   getOwnBrands:    ()              => apiFetch('/api/products/own-brands'),
   setOwnBrands:    (brands)        => apiFetch('/api/products/own-brands', { method: 'PUT', body: JSON.stringify({ brands }) }),
+  searchProducts:    (query)        => apiFetch('/api/search', { method: 'POST', body: JSON.stringify({ query }) }),
   getClientProducts: ()            => apiFetch('/api/my-products'),
   addClientProduct:  (p)           => apiFetch('/api/my-products', { method: 'POST', body: JSON.stringify(p) }),
   deleteClientProduct: (id)        => apiFetch(`/api/my-products/${id}`, { method: 'DELETE' }),

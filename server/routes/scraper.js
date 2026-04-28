@@ -85,6 +85,10 @@ function detectPlatform(url) {
 const PLATFORM_LABEL = { watsons: '屈臣氏', cosmed: '康是美', pchome: 'PChome', poya: '寶雅' };
 
 // ── 名稱比對工具 ──
+function stripSpec(name) {
+  return (name || '').replace(/[\d.]+\s*(ml|l(?![a-z])|g(?![a-z])|mg|kg|oz|抽|片|包|入|顆|條)\s*$/i, '').trim();
+}
+
 function normalizeName(name) {
   return name.toLowerCase()
     .replace(/maybelline|媚比琳/g, 'maybelline')
@@ -93,8 +97,15 @@ function normalizeName(name) {
     .replace(/\s+/g, ' ').trim();
 }
 function getTokens(name) {
-  return normalizeName(name).split(/[\s\-_\/,]+/)
+  return normalizeName(name).split(/[\s\-_\/,，。【】（）()]+/)
     .filter(t => t.length > 1 && !/^\d+(\.\d+)?(g|ml|mg)$/.test(t));
+}
+function charOverlap(a, b) {
+  const sA = new Set((a || '').replace(/\s+/g, '').toLowerCase());
+  const sB = new Set((b || '').replace(/\s+/g, '').toLowerCase());
+  const inter = [...sA].filter(c => sB.has(c)).length;
+  const minLen = Math.min(sA.size, sB.size);
+  return minLen > 0 ? inter / minLen : 0;
 }
 function similarity(a, b) {
   const sA = new Set(getTokens(a)), sB = new Set(getTokens(b));
@@ -108,7 +119,7 @@ function similarity(a, b) {
 // 解析失敗的商品記錄 warn，不使用任何 fallback 表達式
 const AI_BATCH_SIZE = 20; // 每批 20 筆，避免 8b 模型回傳截斷
 
-async function parseNamesWithAI(names) {
+async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant') {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey || names.length === 0) return new Map();
 
@@ -144,7 +155,7 @@ async function parseNamesWithAI(names) {
       try {
         const listed = batch.map((n, i) => `${i}: ${n}`).join('\n');
         const res = await groq.chat.completions.create({
-          model: 'llama-3.1-8b-instant',
+          model,
           messages: [{ role: 'user', content: PROMPT_HEADER + '\n' + listed }],
           temperature: 0,
           max_tokens: 1500,
@@ -380,6 +391,100 @@ async function scrapeCategoryPage(url, platform) {
   }
 }
 
+// ── 語義備援：用 llama-3.3-70b-versatile 比對跨平台辨識失敗的商品 ──
+// 回傳 Map<item.name, existingProduct>，只包含成功比對的項目
+async function semanticFallback(unmatchedItems, existingProducts) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || unmatchedItems.length === 0) return new Map();
+
+  const Groq = require('groq-sdk');
+  const groq = new Groq({ apiKey });
+  const result = new Map();
+
+  // 為每個 item 準備候選清單（brand 相同 OR 字元重疊度 > 0.2，最多 8 筆）
+  const tasks = [];
+  for (const { item, itemBase, parsed } of unmatchedItems) {
+    const brand = (parsed?.brand || '').toLowerCase().trim();
+    const candidates = existingProducts.filter(ep => {
+      const epBrand = (ep.brand || '').toLowerCase().trim();
+      if (brand && epBrand && epBrand === brand) return true;
+      return charOverlap(itemBase, ep.base_name || ep.name) > 0.2;
+    }).slice(0, 8);
+    if (candidates.length > 0) tasks.push({ item, itemBase, candidates });
+  }
+
+  if (tasks.length === 0) return result;
+  logger.info(`[語義備援] ${tasks.length} 筆商品送 llama-3.3-70b-versatile 比對`);
+
+  const BATCH = 8;
+  for (let i = 0; i < tasks.length; i += BATCH) {
+    const batch = tasks.slice(i, i + BATCH);
+
+    const itemsDesc = batch.map((t, idx) =>
+      `待比對[${idx}]：「${t.itemBase}」（原始：${t.item.name.slice(0, 40)}）`
+    ).join('\n');
+
+    const candsDesc = batch.map((t, idx) =>
+      `待比對[${idx}] 候選：\n` +
+      t.candidates.map((ep, ci) =>
+        `  ${ci}: base_name="${ep.base_name || ep.name}"  brand="${ep.brand || ''}"`
+      ).join('\n')
+    ).join('\n\n');
+
+    const prompt =
+`你是電商商品比對專家。判斷每筆「待比對」商品是否與其候選清單中某筆為同一商品。
+同一商品定義：相同品牌 + 相同產品類型 + 相同規格。色號/顏色不同視為不同商品。
+
+${itemsDesc}
+
+${candsDesc}
+
+回傳 JSON 陣列，每筆對應一個待比對，match 填候選 index（整數）或 null：
+範例：[{"i":0,"match":2},{"i":1,"match":null}]
+只回傳 JSON，不要其他文字。`;
+
+    let attempt = 0;
+    while (attempt < 2) {
+      try {
+        const res = await groq.chat.completions.create({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0,
+          max_tokens: 300,
+        });
+        const text = res.choices[0]?.message?.content?.trim() || '[]';
+        const jsonStr = (() => {
+          let depth = 0, start = -1;
+          for (let ci = 0; ci < text.length; ci++) {
+            if (text[ci] === '[') { if (start === -1) start = ci; depth++; }
+            else if (text[ci] === ']') { if (--depth === 0 && start !== -1) return text.slice(start, ci + 1); }
+          }
+          return null;
+        })();
+        if (!jsonStr) { logger.warn('[語義備援] 回傳非 JSON，跳過此批次'); break; }
+
+        const entries = JSON.parse(jsonStr);
+        for (const entry of entries) {
+          if (typeof entry.i !== 'number' || entry.i < 0 || entry.i >= batch.length) continue;
+          if (entry.match === null || entry.match === undefined) continue;
+          const mi = parseInt(entry.match, 10);
+          const task = batch[entry.i];
+          if (isNaN(mi) || mi < 0 || mi >= task.candidates.length) continue;
+          const matched = task.candidates[mi];
+          result.set(task.item.name, matched);
+          logger.info(`[語義備援] 命中：${task.item.name.slice(0, 30)} → ${(matched.base_name || matched.name).slice(0, 30)}`);
+        }
+        break;
+      } catch (err) {
+        attempt++;
+        if (attempt >= 2) logger.warn(`[語義備援] 批次失敗：${err.message}`);
+      }
+    }
+  }
+
+  return result;
+}
+
 // ── 比對 & 更新資料庫，回傳價格異動清單 ──
 async function matchAndUpdate(scrapedProducts, platform) {
   const db = getDB();
@@ -389,6 +494,48 @@ async function matchAndUpdate(scrapedProducts, platform) {
   const validProducts = scrapedProducts.filter(p => p.price);
   const aiMap = await parseNamesWithAI(validProducts.map(p => p.name));
 
+  // Layer 0：建立 URL → product_id 對照表，同平台重爬快速通道
+  const urlRows = db.prepare('SELECT url, product_id FROM product_urls').all();
+  const urlMap  = new Map(urlRows.map(r => [r.url, r.product_id]));
+
+  // ── 預先計算每個商品的比對決策（所有 async 都在 transaction 前完成）──
+  // matchPlan: Map<item.name, { type: 'match'|'new', product?, parsed, itemBase, itemVariant }>
+  const matchPlan      = new Map();
+  const unmatchedItems = [];   // 全部非 URL 命中的商品，皆送 AI 比對
+
+  for (const item of validProducts) {
+    const parsed      = aiMap.get(item.name);
+    if (!parsed) logger.warn(`[AI解析] 未解析：${item.name.slice(0, 40)}`);
+    const itemBase    = parsed?.baseName || item.name;
+    const itemVariant = parsed?.variant  || null;
+
+    // Layer 0: URL 完全比對（最快、零 AI 費用）
+    if (item.productUrl && urlMap.has(item.productUrl)) {
+      const epRecord = existing.find(ep => ep.id === urlMap.get(item.productUrl));
+      if (epRecord) {
+        matchPlan.set(item.name, { type: 'match', product: epRecord, parsed, itemBase, itemVariant });
+        continue;
+      }
+    }
+
+    // 其餘全部交給 AI 語義比對
+    unmatchedItems.push({ item, parsed, itemBase, itemVariant });
+  }
+
+  // AI 語義比對（llama-3.3-70b-versatile）— 所有非 URL 命中的商品
+  const semanticMap = unmatchedItems.length > 0
+    ? await semanticFallback(unmatchedItems, existing)
+    : new Map();
+
+  for (const { item, parsed, itemBase, itemVariant } of unmatchedItems) {
+    const matched = semanticMap.get(item.name);
+    matchPlan.set(item.name, matched
+      ? { type: 'match', product: matched, parsed, itemBase, itemVariant }
+      : { type: 'new',   parsed, itemBase, itemVariant }
+    );
+  }
+
+  // ── 執行 transaction（所有決策已定，只做 DB 寫入）──
   const insertPrice = db.prepare(`
     INSERT INTO price_records (id, product_id, platform, price, original_price, discount_label, in_stock)
     VALUES (?, ?, ?, ?, ?, ?, 1)
@@ -396,32 +543,19 @@ async function matchAndUpdate(scrapedProducts, platform) {
 
   let added = 0, updated = 0;
   const priceChanges = [];
-  const alertQueue = [];
-  const addedThisRun = new Set(); // 本次新增的商品 id，不對這些觸發價格警示
+  const alertQueue   = [];
+  const addedThisRun = new Set();
 
   db.transaction(() => {
     for (const item of validProducts) {
-      const parsed   = aiMap.get(item.name);
-      if (!parsed) logger.warn(`[AI解析] 未解析：${item.name.slice(0, 40)}`);
-      const itemBase = parsed?.baseName || item.name;
-      const itemVariant = parsed?.variant || null;
+      const plan = matchPlan.get(item.name);
+      if (!plan) continue;
 
-      // 兩階段比對：先比 base_name，再比 variant
-      let best = null, bestScore = 0;
-      for (const ep of existing) {
-        const epBase = ep.base_name || ep.name;
-        const score  = similarity(itemBase, epBase);
-        if (score > bestScore) { bestScore = score; best = ep; }
-      }
-
-      const bestVariant = best ? best.variant : null;
-      const variantMatch = (itemVariant ?? '').toLowerCase() === (bestVariant ?? '').toLowerCase();
-
-      if (bestScore >= 0.75 && best && variantMatch) {
+      if (plan.type === 'match') {
+        const best   = plan.product;
         const latest = db.prepare(`SELECT price FROM price_records WHERE product_id=? AND platform=? ORDER BY scraped_at DESC LIMIT 1`).get(best.id, platform);
         if (latest && latest.price !== item.price) {
           insertPrice.run(uuidv4(), best.id, platform, item.price, item.origPrice ?? null, null);
-          // 本次剛新增的商品不觸發警示（同一爬蟲內重複出現造成的假變動）
           if (!addedThisRun.has(best.id)) {
             const diff = item.price - latest.price;
             const pct  = ((diff / latest.price) * 100).toFixed(1);
@@ -431,7 +565,7 @@ async function matchAndUpdate(scrapedProducts, platform) {
           updated++;
         } else if (!latest) {
           insertPrice.run(uuidv4(), best.id, platform, item.price, item.origPrice ?? null, null);
-          updated++;
+          added++;   // 此平台第一筆價格記錄 = 新增資料，非價格異動
         }
         if (item.productUrl) {
           const existingUrl = db.prepare('SELECT id FROM product_urls WHERE product_id=? AND platform=?').get(best.id, platform);
@@ -442,6 +576,8 @@ async function matchAndUpdate(scrapedProducts, platform) {
           }
         }
       } else {
+        // type === 'new'
+        const { parsed, itemBase, itemVariant } = plan;
         const productId = uuidv4();
         db.prepare(`INSERT INTO products (id, name, base_name, variant, brand, category, emoji, image_url, is_active) VALUES (?,?,?,?,?,'唇膏','💄',?,1)`)
           .run(productId, item.name, itemBase, itemVariant, parsed?.brand || '', item.imageUrl || null);
@@ -706,3 +842,6 @@ router.post('/category/watsons', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.scrapeCategoryPage = scrapeCategoryPage;
+module.exports.parseNamesWithAI   = parseNamesWithAI;
+module.exports.normalizeName      = normalizeName;
