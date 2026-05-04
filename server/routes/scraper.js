@@ -177,7 +177,10 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
 
 只回傳 JSON 陣列，不要其他文字。商品清單：`;
 
-  for (const batch of batches) {
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    // 批次間間隔 3 秒，避免 Groq TPM rate limit
+    if (batchIdx > 0) await new Promise(r => setTimeout(r, 3000));
     let attempt = 0;
     while (attempt < 3) {
       try {
