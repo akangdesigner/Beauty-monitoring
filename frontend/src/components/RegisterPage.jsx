@@ -281,7 +281,7 @@ export default function RegisterPage({ isOnline, toast }) {
     e.preventDefault()
     if (!isOnline) { toast('⚠ 後端離線，請稍後再試', 'error'); return }
     if (selected.length === 0) { toast('請至少選擇一個平台', 'error'); return }
-    const confirmed = window.confirm('⚠ 初始設定將會清除所有現有的監控商品與爬蟲網址，確定要繼續嗎？')
+    const confirmed = window.confirm('⚠ 初始設定將會清除所有現有的監控商品資料，確定要繼續嗎？')
     if (!confirmed) return
 
     const entries = []
@@ -293,7 +293,6 @@ export default function RegisterPage({ isOnline, toast }) {
 
     setLoading(true)
     try {
-      await api.clearAllScraperUrls()
       await api.deleteAllProducts()
       await api.deleteAllClientProducts()
       for (const { url, label } of entries) await api.addScraperUrl(url, label)
