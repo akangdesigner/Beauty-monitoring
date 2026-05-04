@@ -8,15 +8,29 @@ const TYPE_MAP = {
 const PF_LABEL = { watsons:'屈臣氏', cosmed:'康是美', poya:'寶雅', pchome:'PChome' }
 const PF_CLASS = { watsons:'pb-watsons', cosmed:'pb-cosmed', poya:'pb-poya', pchome:'pb-watsons' }
 
-export default function AlertFeed({ alerts, onMarkAllRead }) {
+export default function AlertFeed({ alerts, onMarkAllRead, onViewAll }) {
   return (
     <div className="alert-card">
       <div className="section-header" style={{ marginBottom: 12 }}>
         <div className="section-title">警示動態</div>
-        <button className="btn btn-ghost" style={{ fontSize: 11, padding: '5px 10px' }} onClick={onMarkAllRead}>
-          全部已讀
-        </button>
+        <div style={{ display:'flex', gap:6 }}>
+          {alerts.length > 0 && (
+            <button className="btn btn-ghost" style={{ fontSize: 11, padding: '5px 10px' }} onClick={onMarkAllRead}>
+              全部已讀
+            </button>
+          )}
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '5px 10px' }} onClick={onViewAll}>
+            查看全部 →
+          </button>
+        </div>
       </div>
+      {alerts.length === 0 ? (
+        <div className="alert-empty">
+          <div className="alert-empty-icon">🔔</div>
+          <div className="alert-empty-text">目前沒有警示記錄</div>
+          <div className="alert-empty-sub">爬蟲比對到價格變動時會在此顯示</div>
+        </div>
+      ) : null}
       <div className="alert-list">
         {alerts.map(a => {
           const t = TYPE_MAP[a.type] ?? { icon:'●', cls:'ai-violet', diffCls:'neg' }

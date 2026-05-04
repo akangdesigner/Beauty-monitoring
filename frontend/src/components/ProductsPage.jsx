@@ -1,10 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
 import { apiFetch, api } from '../api'
 
-const CATEGORY_LABEL = {
-  skincare: '保養', makeup: '彩妝', haircare: '洗護', 唇膏: '唇膏', other: '其他',
+// 舊英文 category key 的顯示名稱（向下相容，不列入新選單）
+const CATEGORY_LABEL = { skincare: '保養', makeup: '彩妝', haircare: '洗護', other: '其他' }
+
+// 與 PriceTable.jsx getProductType 相同的邏輯，從監控商品 base_name 推算品類
+function getTypeFromProduct(p) {
+  const brand = p.brand || ''
+  const base  = p.base_name || p.name || ''
+  let type = brand && base.startsWith(brand) ? base.slice(brand.length).trim() : base
+  type = type.replace(/[\d.]+\s*(ml|l(?![a-z])|g(?![a-z])|mg|kg|oz|抽|片|包|入|顆|條)\s*$/i, '').trim()
+  if (type.includes('唇')) {
+    const huIdx = type.lastIndexOf('護唇')
+    if (huIdx >= 0) return type.slice(huIdx)
+    const chunIdx = type.lastIndexOf('唇')
+    if (chunIdx > 0) return type.slice(chunIdx)
+  }
+  return type
 }
-const CATEGORY_OPTIONS = Object.entries(CATEGORY_LABEL)
 
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/).filter(Boolean)
@@ -72,23 +85,24 @@ function ProductCard({ p, onEdit, onDelete }) {
   )
 }
 
-const EMPTY_FORM = { name: '', brand: '', category: 'skincare', image_url: '', price: '', note: '' }
+const EMPTY_FORM = { name: '', brand: '', category: 'other', image_url: '', price: '', note: '' }
 
 export default function ProductsPage({ isOnline, toast }) {
-  const [products,    setProducts]   = useState([])
-  const [ownBrands,   setOwnBrands]  = useState([])
-  const [newBrand,    setNewBrand]   = useState('')
-  const [brandSaving, setBrandSaving] = useState(false)
-  const [loading,     setLoading]    = useState(false)
-  const [keyword,     setKeyword]    = useState('')
-  const [catFilter,   setCatFilter]  = useState('all')
-  const [brandFilter, setBrandFilter] = useState('all')
-  const [modal,       setModal]      = useState(false)
-  const [editId,      setEditId]     = useState(null)
-  const [form,        setForm]       = useState(EMPTY_FORM)
-  const [saving,      setSaving]     = useState(false)
-  const [csvRows,     setCsvRows]    = useState([])
-  const [csvBusy,     setCsvBusy]    = useState(false)
+  const [products,        setProducts]        = useState([])
+  const [ownBrands,       setOwnBrands]       = useState([])
+  const [newBrand,        setNewBrand]        = useState('')
+  const [brandSaving,     setBrandSaving]     = useState(false)
+  const [loading,         setLoading]         = useState(false)
+  const [keyword,         setKeyword]         = useState('')
+  const [catFilter,       setCatFilter]       = useState('all')
+  const [brandFilter,     setBrandFilter]     = useState('all')
+  const [modal,           setModal]           = useState(false)
+  const [editId,          setEditId]          = useState(null)
+  const [form,            setForm]            = useState(EMPTY_FORM)
+  const [saving,          setSaving]          = useState(false)
+  const [csvRows,         setCsvRows]         = useState([])
+  const [csvBusy,         setCsvBusy]         = useState(false)
+  const [categoryOptions, setCategoryOptions] = useState([])
   const fileRef = useRef()
 
   async function load() {
@@ -104,6 +118,15 @@ export default function ProductsPage({ isOnline, toast }) {
     } catch {}
     setLoading(false)
   }
+
+  // 從監控儀表板同步品類選項（與 PriceTable 的品類篩選完全對應）
+  useEffect(() => {
+    apiFetch('/api/dashboard/summary').then(data => {
+      if (!Array.isArray(data)) return
+      const types = [...new Set(data.map(getTypeFromProduct).filter(Boolean))].sort()
+      if (types.length > 0) setCategoryOptions(types)
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => { load() }, [isOnline])
 
@@ -337,7 +360,7 @@ export default function ProductsPage({ isOnline, toast }) {
         </select>
         <select className="select-styled" value={catFilter} onChange={e => setCatFilter(e.target.value)}>
           <option value="all">全部品類</option>
-          {CATEGORY_OPTIONS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {categoryOptions.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <div style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 'auto' }}>顯示 {filtered.length} / {products.length} 項</div>
       </div>
@@ -402,7 +425,10 @@ export default function ProductsPage({ isOnline, toast }) {
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 5 }}>品類</div>
               <select className="select-styled" style={{ width: '100%' }} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-                {CATEGORY_OPTIONS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                {categoryOptions.length > 0
+                  ? categoryOptions.map(t => <option key={t} value={t}>{t}</option>)
+                  : <option value="other">其他</option>
+                }
               </select>
             </div>
 

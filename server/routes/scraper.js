@@ -410,7 +410,7 @@ async function semanticFallback(unmatchedItems, existingProducts) {
       if (brand && epBrand && epBrand === brand) return true;
       return charOverlap(itemBase, ep.base_name || ep.name) > 0.2;
     }).slice(0, 8);
-    if (candidates.length > 0) tasks.push({ item, itemBase, candidates });
+    if (candidates.length > 0) tasks.push({ item, itemBase, itemVariant: parsed?.variant || '', candidates });
   }
 
   if (tasks.length === 0) return result;
@@ -421,19 +421,23 @@ async function semanticFallback(unmatchedItems, existingProducts) {
     const batch = tasks.slice(i, i + BATCH);
 
     const itemsDesc = batch.map((t, idx) =>
-      `待比對[${idx}]：「${t.itemBase}」（原始：${t.item.name.slice(0, 40)}）`
+      `待比對[${idx}]：「${t.itemBase}」variant="${t.itemVariant}"（原始：${t.item.name.slice(0, 40)}）`
     ).join('\n');
 
     const candsDesc = batch.map((t, idx) =>
       `待比對[${idx}] 候選：\n` +
       t.candidates.map((ep, ci) =>
-        `  ${ci}: base_name="${ep.base_name || ep.name}"  brand="${ep.brand || ''}"`
+        `  ${ci}: base_name="${ep.base_name || ep.name}"  brand="${ep.brand || ''}"  variant="${ep.variant || ''}"`
       ).join('\n')
     ).join('\n\n');
 
     const prompt =
 `你是電商商品比對專家。判斷每筆「待比對」商品是否與其候選清單中某筆為同一商品。
-同一商品定義：相同品牌 + 相同產品類型 + 相同規格。色號/顏色不同視為不同商品。
+同一商品定義：相同品牌 + 相同產品類型 + 相同規格（variant）。
+重要規則：
+- variant 不同（色號、顏色、香味、尺寸等）→ 視為不同商品，回傳 null
+- 待比對 variant 非空、候選 variant 非空，且兩者明顯不同 → 回傳 null
+- 待比對 variant 為空時，可接受候選 variant 為空的項目；但若候選都有具體 variant，則回傳 null
 
 ${itemsDesc}
 
@@ -552,16 +556,18 @@ async function matchAndUpdate(scrapedProducts, platform) {
       if (!plan) continue;
 
       if (plan.type === 'match') {
-        const best   = plan.product;
+        const best = plan.product;
+        // 同一次爬蟲中，同一 product_id 只處理第一次匹配，避免不同規格覆蓋價格造成誤判
+        if (addedThisRun.has(best.id)) continue;
+        addedThisRun.add(best.id);
+
         const latest = db.prepare(`SELECT price FROM price_records WHERE product_id=? AND platform=? ORDER BY scraped_at DESC LIMIT 1`).get(best.id, platform);
         if (latest && latest.price !== item.price) {
           insertPrice.run(uuidv4(), best.id, platform, item.price, item.origPrice ?? null, null);
-          if (!addedThisRun.has(best.id)) {
-            const diff = item.price - latest.price;
-            const pct  = ((diff / latest.price) * 100).toFixed(1);
-            priceChanges.push(`${item.name.slice(0,25)} $${latest.price}→$${item.price}（${diff>0?'+':''}${pct}%）`);
-            alertQueue.push({ product: { id: best.id, name: best.name, brand: best.brand || '' }, platform, newPrice: item.price, oldPrice: latest.price });
-          }
+          const diff = item.price - latest.price;
+          const pct  = ((diff / latest.price) * 100).toFixed(1);
+          priceChanges.push(`${item.name.slice(0,25)} $${latest.price}→$${item.price}（${diff>0?'+':''}${pct}%）`);
+          alertQueue.push({ product: { id: best.id, name: best.name, brand: best.brand || '' }, platform, newPrice: item.price, oldPrice: latest.price });
           updated++;
         } else if (!latest) {
           insertPrice.run(uuidv4(), best.id, platform, item.price, item.origPrice ?? null, null);

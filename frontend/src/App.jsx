@@ -7,7 +7,6 @@ import KPICards       from './components/KPICards'
 import LogStrip       from './components/LogStrip'
 import PriceTable     from './components/PriceTable'
 import TrendChart     from './components/TrendChart'
-import AlertFeed      from './components/AlertFeed'
 import AlertRecordsPage from './components/AlertRecordsPage'
 import LineSettings   from './components/LineSettings'
 import ScraperPage    from './components/ScraperPage'
@@ -190,10 +189,7 @@ export default function App() {
               <KPICards kpi={{ ...kpi, unreadAlerts: newGapCount }} />
               <LogStrip log={log} />
               <PriceTable products={products} onDelete={handleDelete} onStar={handleStar} onDeleteAll={handleDeleteAll} onRename={handleRename} ownBrands={ownBrands} clientProducts={clientProducts} />
-              <div className="mid-grid">
-                <TrendChart products={products} isOnline={isOnline} />
-                <AlertFeed alerts={alerts} onMarkAllRead={handleMarkAllRead} />
-              </div>
+              <TrendChart products={products} />
             </>
           )}
         </main>
