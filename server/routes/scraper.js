@@ -685,32 +685,31 @@ router.get('/test-ai', async (req, res) => {
   }
 });
 
-// POST /api/scraper/reparse — 重新解析所有 base_name=name 的商品（不重爬）
+// POST /api/scraper/reparse — 重新解析所有 base_name=name 的商品（不重爬，同步等待結果）
 router.post('/reparse', async (req, res) => {
   const db = getDB();
   const unresolved = db.prepare("SELECT id, name FROM products WHERE base_name = name OR base_name IS NULL").all();
-  if (unresolved.length === 0) return res.json({ ok: true, message: '沒有需要補解析的商品' });
+  if (unresolved.length === 0) return res.json({ ok: true, updated: 0, message: '沒有需要補解析的商品' });
 
-  res.json({ ok: true, message: `開始重新解析 ${unresolved.length} 筆商品，請稍後查看結果` });
-
-  // 背景執行，不阻塞回應
-  setImmediate(async () => {
-    try {
-      const fixMap = await parseNamesWithAI(unresolved.map(r => r.name));
-      const fixStmt = db.prepare('UPDATE products SET base_name=?, brand=?, variant=? WHERE id=?');
-      let count = 0;
-      for (const row of unresolved) {
-        const p = fixMap.get(row.name);
-        if (p?.baseName && p.baseName !== row.name) {
-          fixStmt.run(p.baseName, p.brand || '', p.variant || '', row.id);
-          count++;
-        }
+  try {
+    const fixMap = await parseNamesWithAI(unresolved.map(r => r.name));
+    const fixStmt = db.prepare('UPDATE products SET base_name=?, brand=?, variant=? WHERE id=?');
+    const samples = [];
+    let count = 0;
+    for (const row of unresolved) {
+      const p = fixMap.get(row.name);
+      if (p?.baseName && p.baseName !== row.name) {
+        fixStmt.run(p.baseName, p.brand || '', p.variant || '', row.id);
+        if (samples.length < 5) samples.push({ from: row.name.slice(0, 30), to: p.baseName });
+        count++;
       }
-      logger.info(`[reparse] 完成：${count}/${unresolved.length} 筆成功解析`);
-    } catch (err) {
-      logger.error(`[reparse] 失敗：${err.message}`);
     }
-  });
+    logger.info(`[reparse] 完成：${count}/${unresolved.length} 筆成功解析`);
+    res.json({ ok: true, total: unresolved.length, updated: count, aiMapSize: fixMap.size, samples });
+  } catch (err) {
+    logger.error(`[reparse] 失敗：${err.message}`);
+    res.json({ ok: false, error: err.message });
+  }
 });
 
 // ═══════════════════════════════════════════════════════
