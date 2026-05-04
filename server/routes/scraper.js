@@ -179,7 +179,7 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
 
   for (const batch of batches) {
     let attempt = 0;
-    while (attempt < 2) {
+    while (attempt < 3) {
       try {
         const listed = batch.map((n, i) => `${i}: ${n}`).join('\n');
         const res = await groq.chat.completions.create({
@@ -190,12 +190,17 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
         });
 
         const text = res.choices[0]?.message?.content?.trim() || '[]';
-        // 用括號深度計數，取出第一個完整的 [...] 避免模型附加說明文字造成 parse 錯誤
+        // 優先抓 ```json ... ``` 區塊，再 fallback 到括號深度計數
         const jsonStr = (() => {
+          const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (codeBlock) return codeBlock[1].trim();
           let depth = 0, start = -1;
           for (let i = 0; i < text.length; i++) {
-            if (text[i] === '[') { if (start === -1) start = i; depth++; }
-            else if (text[i] === ']') { if (--depth === 0 && start !== -1) return text.slice(start, i + 1); }
+            if (text[i] === '[' && (i + 1 >= text.length || text[i + 1] !== '*')) {
+              if (start === -1) start = i; depth++;
+            } else if (text[i] === ']') {
+              if (--depth === 0 && start !== -1) return text.slice(start, i + 1);
+            }
           }
           return null;
         })();
@@ -230,7 +235,11 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
         break;
       } catch (err) {
         attempt++;
-        if (attempt >= 2) {
+        const is429 = err.message?.includes('429') || err.status === 429;
+        if (is429 && attempt < 3) {
+          // Rate limit：等 5 秒後重試
+          await new Promise(r => setTimeout(r, 5000));
+        } else if (attempt >= 3) {
           logger.warn(`[AI解析] 批次失敗（已重試）：${err.message}`);
           if (_errors) _errors.push(err.message);
         }
