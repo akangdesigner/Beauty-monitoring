@@ -137,7 +137,7 @@ function similarity(a, b) {
 // ── AI 批次解析商品名稱（Groq）──
 // 回傳 Map<name, { baseName, brand, productType, variant }>
 // 解析失敗的商品記錄 warn，不使用任何 fallback 表達式
-const AI_BATCH_SIZE = 20; // 每批 20 筆，避免 8b 模型回傳截斷
+const AI_BATCH_SIZE = 8; // 每批 8 筆，避免模型多行格式造成 token 截斷
 
 async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors = null) {
   const apiKey = process.env.GROQ_API_KEY;
@@ -186,7 +186,7 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
           model,
           messages: [{ role: 'user', content: PROMPT_HEADER + '\n' + listed }],
           temperature: 0,
-          max_tokens: 1500,
+          max_tokens: 800,
         });
 
         const text = res.choices[0]?.message?.content?.trim() || '[]';
@@ -199,7 +199,11 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
           }
           return null;
         })();
-        if (!jsonStr) { logger.warn('[AI解析] 回傳非 JSON'); break; }
+        if (!jsonStr) {
+          logger.warn('[AI解析] 回傳非 JSON，原始回應：' + text.slice(0, 200));
+          if (_errors) _errors.push('回傳非 JSON: ' + text.slice(0, 200));
+          break;
+        }
 
         const parsed = JSON.parse(jsonStr);
         parsed.forEach((p, arrayIdx) => {
