@@ -179,8 +179,8 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
 
   for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
     const batch = batches[batchIdx];
-    // 批次間間隔 3 秒，避免 Groq TPM rate limit
-    if (batchIdx > 0) await new Promise(r => setTimeout(r, 3000));
+    // 批次間間隔 15 秒，避免 Groq TPM 6000/min 限制（每批約 1100 tokens）
+    if (batchIdx > 0) await new Promise(r => setTimeout(r, 15000));
     let attempt = 0;
     while (attempt < 3) {
       try {
