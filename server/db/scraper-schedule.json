@@ -1,0 +1,55 @@
+{
+  "enabled": true,
+  "time": "15:25",
+  "days": "daily",
+  "urls": [
+    {
+      "id": "a9106445-4aec-45aa-8b7d-0870ca530dd6",
+      "url": "https://www.watsons.com.tw/%E5%8C%96%E5%A6%9D%E5%93%81/%E5%94%87%E8%86%8F/c/10440301?currentPage=0",
+      "platform": "watsons",
+      "label": "屈臣氏 分類頁 1",
+      "enabled": true,
+      "addedAt": "2026-04-09T09:00:41.853Z"
+    },
+    {
+      "id": "92e13b16-7230-4082-8644-b9da44092e40",
+      "url": "https://www.watsons.com.tw/%E5%8C%96%E5%A6%9D%E5%93%81/%E5%94%87%E8%86%8F/c/10440301?currentPage=1",
+      "platform": "watsons",
+      "label": "屈臣氏 分類頁 2",
+      "enabled": true,
+      "addedAt": "2026-04-09T09:00:41.857Z"
+    },
+    {
+      "id": "70262a3f-6dd0-4d4b-9927-ea54e1a7c25f",
+      "url": "https://shop.cosmed.com.tw/v2/official/SalePageCategory/461724?sortMode=Curator",
+      "platform": "cosmed",
+      "label": "康是美 分類頁",
+      "enabled": true,
+      "addedAt": "2026-04-09T09:00:41.863Z"
+    },
+    {
+      "id": "1347e461-182c-41ef-b9af-619ca8cfaaea",
+      "url": "https://www.poyabuy.com.tw/v2/official/SalePageCategory/566524?sortMode=Curator",
+      "platform": "poya",
+      "label": "寶雅分類頁",
+      "enabled": true,
+      "addedAt": "2026-04-09T09:00:41.867Z"
+    },
+    {
+      "id": "e025c614-2768-41f4-9eb7-2e0792a4cdbc",
+      "url": "https://www.watsons.com.tw/%E7%BE%8E%E9%AB%94%E7%BE%8E%E9%AB%AE/%E6%B4%97%E9%AB%AE%E4%B9%B3-%E6%BD%A4%E9%AB%AE%E4%B9%B3/c/10480401?q=:igcBestSeller&gclsrc=aw.ds&gad_source=1&gad_campaignid=325608849&gbraid=0AAAAADbC9E2VlWxf37y4Y6LF2tlslwkDL&gclid=CjwKCAjwnN3OBhA8EiwAfpTYetklflLqi--y_1qGyUg1TRqqh9wghMYK3-wMD1GqMRyDw8dd7cRXiBoCK3gQAvD_BwE",
+      "platform": "watsons",
+      "label": "屈臣氏洗髮",
+      "enabled": false,
+      "addedAt": "2026-04-10T03:14:47.336Z"
+    },
+    {
+      "id": "c24c0381-7977-4f59-8590-71e40b04ff66",
+      "url": "https://shop.cosmed.com.tw/v2/official/SalePageCategory/462699?sortMode=Curator",
+      "platform": "cosmed",
+      "label": "康是美 泡麵",
+      "enabled": false,
+      "addedAt": "2026-04-28T08:55:49.070Z"
+    }
+  ]
+}
