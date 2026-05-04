@@ -46,25 +46,45 @@ function applySchedule(s) {
   const [hh, mm] = s.time.split(':');
   const expr = `${mm} ${hh} * * ${daysToCron(s.days)}`;
   currentCronJob = cron.schedule(expr, async () => {
-    const current = loadSchedule(); // 每次觸發重新讀設定，確保取得最新 URL 清單
+    const current = loadSchedule();
     const enabledUrls = current.urls.filter(u => u.enabled);
-    logger.info(`[排程] 啟動分類頁爬取，共 ${enabledUrls.length} 個 URL`);
+    logger.info(`[排程] Phase 1：爬取 ${enabledUrls.length} 個 URL`);
 
+    // Phase 1：全部爬完再做任何解析
+    const jobs = [];
     for (const item of enabledUrls) {
       const db = getDB();
       const jobId = uuidv4();
       db.prepare('INSERT INTO scrape_jobs (id, platform, target_url) VALUES (?, ?, ?)').run(jobId, item.platform, item.url);
-
       try {
-        const scraped = await scrapeCategoryPage(item.url, item.platform);
-        const result  = await matchAndUpdate(scraped, item.platform);
-        db.prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`)
-          .run(result.total, jobId);
-        logger.info(`[排程] ${item.platform} 完成：新增 ${result.added}，更新 ${result.updated}，共 ${result.total} 筆`);
+        const products = await scrapeCategoryPage(item.url, item.platform);
+        jobs.push({ platform: item.platform, products, jobId });
+        logger.info(`[排程] ${item.platform} 爬取完成，${products.length} 筆`);
       } catch (err) {
-        db.prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
+        getDB().prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
           .run(err.message, jobId);
         logger.error(`[排程] 爬取失敗 ${item.url}: ${err.message}`);
+      }
+    }
+
+    // Phase 2：合併所有商品名稱，一次送 AI 解析
+    const allNames = [...new Set(jobs.flatMap(j => j.products.filter(p => p.price).map(p => p.name)))];
+    logger.info(`[排程] Phase 2：AI 解析 ${allNames.length} 個名稱`);
+    const sharedAiMap = await parseNamesWithAI(allNames);
+    logger.info(`[排程] AI 解析完成，${sharedAiMap.size} 筆成功`);
+
+    // Phase 3：逐平台比對寫入
+    logger.info(`[排程] Phase 3：比對寫入資料庫`);
+    for (const { platform, products, jobId } of jobs) {
+      try {
+        const result = await matchAndUpdate(products, platform, sharedAiMap);
+        getDB().prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`)
+          .run(result.total, jobId);
+        logger.info(`[排程] ${platform} 完成：新增 ${result.added}，更新 ${result.updated}，共 ${result.total} 筆`);
+      } catch (err) {
+        getDB().prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
+          .run(err.message, jobId);
+        logger.error(`[排程] 寫入失敗 ${platform}: ${err.message}`);
       }
     }
   }, { timezone: 'Asia/Taipei' });
@@ -496,13 +516,13 @@ ${candsDesc}
 }
 
 // ── 比對 & 更新資料庫，回傳價格異動清單 ──
-async function matchAndUpdate(scrapedProducts, platform) {
+// sharedAiMap：批次模式下由外部預先建立並傳入，避免各平台重複呼叫 AI
+async function matchAndUpdate(scrapedProducts, platform, sharedAiMap = null) {
   const db = getDB();
   const existing = db.prepare('SELECT id, name, base_name, variant, brand FROM products').all();
 
-  // AI 批次解析所有商品名稱（有 GROQ_API_KEY 才跑，否則用 fallback）
   const validProducts = scrapedProducts.filter(p => p.price);
-  const aiMap = await parseNamesWithAI(validProducts.map(p => p.name));
+  const aiMap = sharedAiMap ?? await parseNamesWithAI(validProducts.map(p => p.name));
 
   // Layer 0：建立 URL → product_id 對照表，同平台重爬快速通道
   const urlRows = db.prepare('SELECT url, product_id FROM product_urls').all();
@@ -766,36 +786,49 @@ router.post('/run/:platform', async (req, res) => {
 });
 
 // ── 批次執行所有已啟用的監控網址（背景任務）──
+// 三段式：Phase 1 全部爬完 → Phase 2 合併 AI 解析 → Phase 3 逐平台寫入
 async function runBatchScrapeJob() {
   const current = loadSchedule();
   const enabledUrls = current.urls.filter(u => u.enabled);
   if (!enabledUrls.length) return { total: 0, results: [] };
 
-  const results = [];
-  const db = getDB();
-
-  // 1. 先為所有任務建立記錄
-  const jobIds = [];
+  // Phase 1：全部平台爬取完畢再繼續
+  logger.info(`[批次] Phase 1：爬取 ${enabledUrls.length} 個網址`);
+  const jobs = [];
   for (const item of enabledUrls) {
     const jobId = uuidv4();
-    db.prepare(`INSERT INTO scrape_jobs (id, platform, status, target_url) VALUES (?, ?, 'running', ?)`).run(jobId, item.platform, item.url);
-    jobIds.push({ id: jobId, ...item });
-  }
-
-  // 2. 逐一執行（目前先循序執行，避免瀏覽器資源衝突，但優化單次執行時間）
-  for (const job of jobIds) {
+    getDB().prepare(`INSERT INTO scrape_jobs (id, platform, status, target_url) VALUES (?, ?, 'running', ?)`).run(jobId, item.platform, item.url);
     try {
-      const scraped = await scrapeCategoryPage(job.url, job.platform);
-      const result  = await matchAndUpdate(scraped, job.platform);
-      db.prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`)
-        .run(result.total, job.id);
-      results.push({ platform: job.platform, label: job.label, status: 'success', total: result.total, added: result.added, updated: result.updated });
+      const products = await scrapeCategoryPage(item.url, item.platform);
+      jobs.push({ jobId, platform: item.platform, label: item.label, products });
+      logger.info(`[批次] ${item.platform} 爬取完成，${products.length} 筆`);
     } catch (err) {
-      db.prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`)
-        .run(err.message, job.id);
-      results.push({ platform: job.platform, label: job.label, status: 'failed', error: err.message });
+      getDB().prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`).run(err.message, jobId);
+      logger.error(`[批次] 爬取失敗 ${item.url}: ${err.message}`);
     }
   }
+
+  // Phase 2：所有平台的商品名稱合併，一次送 AI 解析
+  const allNames = [...new Set(jobs.flatMap(j => j.products.filter(p => p.price).map(p => p.name)))];
+  logger.info(`[批次] Phase 2：AI 解析 ${allNames.length} 個不重複名稱`);
+  const sharedAiMap = await parseNamesWithAI(allNames);
+  logger.info(`[批次] AI 解析完成，${sharedAiMap.size} 筆成功`);
+
+  // Phase 3：逐平台比對分類寫入
+  logger.info(`[批次] Phase 3：比對寫入資料庫`);
+  const results = [];
+  for (const { jobId, platform, label, products } of jobs) {
+    try {
+      const result = await matchAndUpdate(products, platform, sharedAiMap);
+      getDB().prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`).run(result.total, jobId);
+      results.push({ platform, label, status: 'success', total: result.total, added: result.added, updated: result.updated });
+      logger.info(`[批次] ${platform} 完成：新增 ${result.added}，更新 ${result.updated}`);
+    } catch (err) {
+      getDB().prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`).run(err.message, jobId);
+      results.push({ platform, label, status: 'failed', error: err.message });
+    }
+  }
+
   return { total: enabledUrls.length, success: results.filter(r => r.status === 'success').length, failed: results.filter(r => r.status === 'failed').length, results };
 }
 
