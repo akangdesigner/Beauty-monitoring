@@ -223,16 +223,21 @@ Example input:
           if (!p.productType || p.productType.length <= 1) return;
           const originalName = batch[itemIdx];
           let brand = (p.brand || '').trim();
-          // 驗證 AI 回傳的 brand 確實出現在商品名稱中（防止 AI 把批次內品牌張冠李戴）
+          // 只在可確認「張冠李戴」時修正品牌：
+          // AI 回傳的 brand 不在名稱中，且名稱裡有其他已知品牌 → 代表批次內品牌被對調
           if (brand) {
             const normalizedBrand = normalizeName(brand);
             const normalizedOrigName = normalizeName(originalName);
             if (!normalizedOrigName.includes(normalizedBrand)) {
-              // brand 不在名稱裡，改從名稱開頭擷取英文單字作為品牌
-              const m = originalName.match(/^([A-Za-z][A-Za-z0-9\-&]{1,})/);
-              const fallback = m ? m[1] : '';
-              logger.warn(`[AI解析] 品牌不符：「${brand}」不在「${originalName.slice(0, 30)}」中，改用「${fallback}」`);
-              brand = fallback;
+              const KNOWN_BRANDS = ['maybelline', 'kate', 'heme'];
+              const wrongBrand = KNOWN_BRANDS.find(kb => kb !== normalizedBrand && normalizedOrigName.includes(kb));
+              if (wrongBrand) {
+                const m = originalName.match(/^([A-Za-z][A-Za-z0-9\-&]{1,})/);
+                const fallback = m ? m[1] : '';
+                logger.warn(`[AI解析] 品牌張冠李戴：「${brand}」但名稱含「${wrongBrand}」，改用「${fallback}」`);
+                brand = fallback;
+              }
+              // 若名稱中沒有其他已知品牌（如中文品牌 卡翠絲=CATRICE），信任 AI 的結果
             }
           }
           const productType = (p.productType || '').trim();
