@@ -347,7 +347,7 @@ export default function ScraperPage({ isOnline, toast }) {
             {urlList.map(entry => (
               <div key={entry.id} style={{
                 background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '10px 14px',
+                borderRadius: 8, padding: '10px 14px', position: 'relative',
                 opacity: entry.enabled ? 1 : 0.5,
               }}>
                 {/* 主列 */}
@@ -422,6 +422,11 @@ export default function ScraperPage({ isOnline, toast }) {
                   >
                     {runningId === entry.id ? '⏳ 執行中…' : '▶ 立即爬取'}
                   </button>
+                  {runningId === entry.id && (
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 3, borderRadius: '0 0 8px 8px', overflow: 'hidden' }}>
+                      <div className="scrape-progress-indeterminate" style={{ height: '100%' }} />
+                    </div>
+                  )}
                   <button
                     onClick={() => handleDelete(entry.id, entry.label)}
                     style={{
@@ -464,20 +469,18 @@ export default function ScraperPage({ isOnline, toast }) {
             >
               {batchRunning ? '⏳ 執行中…' : '▶ 批次手動抓取'}
             </button>
-            {batchRunning && batchProgress && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-                <div style={{ width: 120, height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    borderRadius: 3,
-                    background: 'var(--accent)',
-                    width: batchProgress.total > 0
-                      ? `${Math.round((batchProgress.current / batchProgress.total) * 100)}%`
-                      : '30%',
-                    transition: 'width 0.4s ease',
-                  }} />
+            {batchRunning && (
+              <div className="scrape-progress-wrap">
+                <div className="scrape-progress-label">
+                  {batchProgress?.message || '準備中...'}
+                  {batchProgress?.total > 0 && batchProgress.phase !== 'scraping' &&
+                    ` (${Math.round((batchProgress.current / batchProgress.total) * 100)}%)`}
                 </div>
-                <span>{batchProgress.message}</span>
+                <div className="scrape-progress-track">
+                  {batchProgress?.total > 0
+                    ? <div className="scrape-progress-fill" style={{ width: `${Math.max(4, Math.round((batchProgress.current / batchProgress.total) * 100))}%` }} />
+                    : <div className="scrape-progress-indeterminate" />}
+                </div>
               </div>
             )}
             <Toggle
