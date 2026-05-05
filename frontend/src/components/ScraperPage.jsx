@@ -212,10 +212,12 @@ export default function ScraperPage({ isOnline, toast }) {
         try {
           const prog = await api.getScraperProgress();
           setBatchProgress(prog);
-          if (!prog.running && prog.phase === 'done') {
+          if (!prog.running) {
             setBatchRunning(false);
-            loadAll();
-            toast('批次抓取已完成', 'success');
+            if (prog.phase === 'done') {
+              loadAll();
+              toast('批次抓取已完成', 'success');
+            }
           }
         } catch (err) {
           console.error('Polling error:', err);

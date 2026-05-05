@@ -142,7 +142,7 @@ function similarity(a, b) {
 // 解析失敗的商品記錄 warn，不使用任何 fallback 表達式
 const AI_BATCH_SIZE = 8; // 每批 8 筆，避免模型多行格式造成 token 截斷
 
-async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors = null) {
+async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors = null, onBatchDone = null) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey || names.length === 0) return new Map();
 
@@ -237,6 +237,7 @@ Example input:
           });
         });
         logger.info(`[AI解析] 批次 ${batch.length} 筆完成`);
+        if (onBatchDone) onBatchDone(batchIdx + 1, batches.length);
         break;
       } catch (err) {
         attempt++;
@@ -946,8 +947,12 @@ async function runBatchScrapeJob() {
   // Phase 2：所有平台的商品名稱合併，一次送 AI 解析
   const allNames = [...new Set(jobs.flatMap(j => j.products.filter(p => p.price).map(p => p.name)))];
   logger.info(`[批次] Phase 2：AI 解析 ${allNames.length} 個不重複名稱`);
-  scrapeProgress = { running: true, phase: 'ai', current: 0, total: allNames.length, message: `AI 解析商品名稱（共 ${allNames.length} 筆）...` };
-  const sharedAiMap = await parseNamesWithAI(allNames);
+  const aiTotalBatches = Math.ceil(allNames.length / AI_BATCH_SIZE);
+  scrapeProgress = { running: true, phase: 'ai', current: 0, total: aiTotalBatches, message: `AI 解析中（0/${aiTotalBatches} 批）...` };
+  const sharedAiMap = await parseNamesWithAI(allNames, 'llama-3.1-8b-instant', null, (done, total) => {
+    scrapeProgress.current = done;
+    scrapeProgress.message = `AI 解析中（${done}/${total} 批）`;
+  });
   logger.info(`[批次] AI 解析完成，${sharedAiMap.size} 筆成功`);
 
   // Phase 3：逐平台比對分類寫入
