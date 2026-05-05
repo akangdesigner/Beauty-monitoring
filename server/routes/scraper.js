@@ -198,7 +198,7 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
         const text = res.choices[0]?.message?.content?.trim() || '[]';
         // 優先抓 ```json ... ``` 區塊，再 fallback 到括號深度計數
         const jsonStr = (() => {
-          const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+          const codeBlock = text.match(/```\w*\s*([\s\S]*?)```/);
           if (codeBlock) return codeBlock[1].trim();
           let depth = 0, start = -1;
           for (let i = 0; i < text.length; i++) {
