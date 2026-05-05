@@ -196,14 +196,16 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
         });
 
         const text = res.choices[0]?.message?.content?.trim() || '[]';
-        // 括號深度計數直接找 [...] —— 不管 code block 裡有無前綴文字都能正確擷取
+        // 只抓 [{ 開頭的 JSON 物件陣列，跳過 code 裡的空陣列 [] 或無關的 [
         const jsonStr = (() => {
           let depth = 0, start = -1;
           for (let i = 0; i < text.length; i++) {
-            if (text[i] === '[') {
-              if (start === -1) start = i; depth++;
-            } else if (text[i] === ']') {
-              if (--depth === 0 && start !== -1) return text.slice(start, i + 1);
+            if (text[i] === '[' && start === -1) {
+              const next = text[i + 1];
+              if (next === '{' || next === '[') { start = i; depth = 1; }
+            } else if (start !== -1) {
+              if (text[i] === '[') depth++;
+              else if (text[i] === ']') { if (--depth === 0) return text.slice(start, i + 1); }
             }
           }
           return null;
