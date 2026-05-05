@@ -163,7 +163,7 @@ For each product name, extract: i (index), brand, productType, spec.
 
 Rules:
 - brand: main brand name only (English preferred), remove repeated Chinese translations (e.g. "KATE 凱婷 凱婷" → brand="KATE")
-- productType: core product category in Chinese, ≥2 chars (e.g. 唇膏, 唇釉, 唇線筆). Remove series name prefix, keep only the last core word. If unknown use 商品
+- productType: MUST be in Traditional Chinese. Core product category only, ≥2 chars. Examples: 唇膏, 唇釉, 唇線筆, 護唇膏, 洗髮精. Remove series name prefix, keep only the last core word. If unknown use 商品. NEVER use English for productType.
 - spec: size/quantity only (e.g. "3g", "600ml"). Empty string if not found. Do NOT include color codes like #01, G03, RD301
 - Remove promotional tags like 【即期品】【特惠】
 
