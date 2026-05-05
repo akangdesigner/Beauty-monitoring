@@ -679,20 +679,20 @@ async function matchAndUpdate(scrapedProducts, platform, sharedAiMap = null) {
       .catch(err => logger.warn(`[排程] 警示觸發失敗: ${err.message}`));
   }
 
-  // 自動補救：新插入商品若 base_name 仍等於 name，立刻重跑 GROQ 解析
+  // 自動補救：新插入商品若 base_name=name 或 brand 為空，立刻重跑 GROQ 解析
   const db2 = getDB();
   const unresolved = [...addedThisRun].map(id =>
-    db2.prepare('SELECT id, name FROM products WHERE id=? AND base_name=name').get(id)
+    db2.prepare("SELECT id, name FROM products WHERE id=? AND (base_name=name OR brand IS NULL OR brand='')").get(id)
   ).filter(Boolean);
 
   if (unresolved.length > 0) {
     logger.info(`[補救] 發現 ${unresolved.length} 筆未解析商品，重新送 AI 解析`);
     const fixMap = await parseNamesWithAI(unresolved.map(r => r.name));
-    const fixStmt = db2.prepare('UPDATE products SET base_name=? WHERE id=?');
+    const fixStmt = db2.prepare('UPDATE products SET base_name=?, brand=?, variant=? WHERE id=?');
     for (const row of unresolved) {
       const p = fixMap.get(row.name);
       if (p?.baseName && p.baseName !== row.name) {
-        fixStmt.run(p.baseName, row.id);
+        fixStmt.run(p.baseName, p.brand || '', p.variant || '', row.id);
         logger.info(`[補救] ${row.name.slice(0, 30)} → ${p.baseName}`);
       }
     }
