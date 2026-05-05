@@ -222,7 +222,19 @@ Example input:
           if (itemIdx >= batch.length) return;
           if (!p.productType || p.productType.length <= 1) return;
           const originalName = batch[itemIdx];
-          const brand = (p.brand || '').trim();
+          let brand = (p.brand || '').trim();
+          // 驗證 AI 回傳的 brand 確實出現在商品名稱中（防止 AI 把批次內品牌張冠李戴）
+          if (brand) {
+            const normalizedBrand = normalizeName(brand);
+            const normalizedOrigName = normalizeName(originalName);
+            if (!normalizedOrigName.includes(normalizedBrand)) {
+              // brand 不在名稱裡，改從名稱開頭擷取英文單字作為品牌
+              const m = originalName.match(/^([A-Za-z][A-Za-z0-9\-&]{1,})/);
+              const fallback = m ? m[1] : '';
+              logger.warn(`[AI解析] 品牌不符：「${brand}」不在「${originalName.slice(0, 30)}」中，改用「${fallback}」`);
+              brand = fallback;
+            }
+          }
           const productType = (p.productType || '').trim();
           const rawSpec = (p.spec || '').trim().replace(/\s+/g, '');
           // 只接受帶單位的規格，且必須實際出現在商品名稱中（防止 AI 幻覺）
@@ -755,10 +767,14 @@ router.get('/reparse-debug', async (req, res) => {
   }
 });
 
-// POST /api/scraper/reparse — 重新解析所有 base_name=name 的商品（不重爬，同步等待結果）
+// POST /api/scraper/reparse — 重新解析商品（不重爬，同步等待結果）
+// ?all=true：重解析所有商品（含品牌設錯的）；預設只解析 base_name=name 的
 router.post('/reparse', async (req, res) => {
   const db = getDB();
-  const unresolved = db.prepare("SELECT id, name FROM products WHERE base_name = name OR base_name IS NULL").all();
+  const forceAll = req.query.all === 'true';
+  const unresolved = forceAll
+    ? db.prepare("SELECT id, name FROM products").all()
+    : db.prepare("SELECT id, name FROM products WHERE base_name = name OR base_name IS NULL").all();
   if (unresolved.length === 0) return res.json({ ok: true, updated: 0, message: '沒有需要補解析的商品' });
 
   try {
@@ -769,7 +785,8 @@ router.post('/reparse', async (req, res) => {
     let count = 0;
     for (const row of unresolved) {
       const p = fixMap.get(row.name);
-      if (p?.baseName && p.baseName !== row.name) {
+      // forceAll 時只要解析成功就更新；一般模式只更新原本未解析的
+      if (p?.baseName && (forceAll || p.baseName !== row.name)) {
         fixStmt.run(p.baseName, p.brand || '', p.variant || '', row.id);
         if (samples.length < 5) samples.push({ from: row.name.slice(0, 30), to: p.baseName });
         count++;
