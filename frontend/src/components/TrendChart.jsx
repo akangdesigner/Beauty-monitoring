@@ -30,13 +30,35 @@ function truncate(str, n) {
   return str && str.length > n ? str.slice(0, n) + '…' : (str || '—')
 }
 
+// 依 brand+base_name 分組，各平台取最低價
+function groupByBaseName(products) {
+  const map = new Map()
+  for (const p of products) {
+    const key = `${p.brand || ''}||${p.base_name || p.name || p.id}`
+    if (!map.has(key)) {
+      map.set(key, { ...p })
+    } else {
+      const g = map.get(key)
+      for (const pf of ['watsons', 'cosmed', 'poya']) {
+        if (p[pf]?.price && (!g[pf]?.price || p[pf].price < g[pf].price)) {
+          g[pf] = p[pf]
+        }
+      }
+    }
+  }
+  return [...map.values()]
+}
+
 export default function TrendChart({ products }) {
   const [mode, setMode] = useState('brand')
   const [selected, setSelected] = useState('')
 
-  const brands = useMemo(() => [...new Set(products.map(p => p.brand).filter(Boolean))].sort(), [products])
+  // 先分組，圖表只顯示唯一 base_name
+  const grouped = useMemo(() => groupByBaseName(products), [products])
 
-  // 剝掉品牌前綴（先用自身 brand，找不到則試所有已知品牌，最後用英數前綴啟發式），再剝單位後綴
+  const brands = useMemo(() => [...new Set(grouped.map(p => p.brand).filter(Boolean))].sort(), [grouped])
+
+  // 剝掉品牌前綴取產品類型
   const typeOf = useCallback((p) => {
     const base = p.base_name || p.name || ''
     const strip = (b) => base.slice(b.length).trim().replace(UNIT_RE, '').trim() || base
@@ -55,13 +77,13 @@ export default function TrendChart({ products }) {
     return base.replace(UNIT_RE, '').trim() || base
   }, [brands])
 
-  const categories = useMemo(() => [...new Set(products.map(typeOf).filter(Boolean))].sort(), [products, typeOf])
+  const categories = useMemo(() => [...new Set(grouped.map(typeOf).filter(Boolean))].sort(), [grouped, typeOf])
 
   const options = mode === 'brand' ? brands : categories
   const current = selected || options[0] || ''
 
   const filtered = useMemo(() => {
-    return products
+    return grouped
       .filter(p => mode === 'brand' ? p.brand === current : typeOf(p) === current)
       .sort((a, b) => {
         const maxA = Math.max(a.watsons?.price || 0, a.cosmed?.price || 0, a.poya?.price || 0)
