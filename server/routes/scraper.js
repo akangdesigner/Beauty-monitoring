@@ -157,18 +157,17 @@ async function parseNamesWithAI(names, model = 'llama-3.1-8b-instant', _errors =
   }
 
   // 提示詞：要求 brand / productType / spec，baseName 由程式自組
-  const PROMPT_HEADER = `你是電商數據清理專家。針對每筆商品名稱，回傳 brand（品牌）、productType（產品類別）和 spec（規格）。
+  const PROMPT_HEADER = `OUTPUT ONLY a raw JSON array. No code. No functions. No explanation. No markdown. Just the JSON array.
 
-規則：
-- 去除【...】促銷標籤（如【即期品】【特惠】）
-- 商品名稱開頭常出現「英文品牌 中文品牌 中文品牌」或「品牌 品牌」的重複格式（如 "KATE 凱婷 凱婷"、"MAYBELLINE 媚比琳 媚比琳"、"CEZANNE CEZANNE"），brand 只取英文或主要名稱一次，忽略後面的中文譯名與重複
-- productType 只填核心品類（如「唇膏」「唇釉」「唇線筆」「洗髮精」），必須 ≥2 字，無法辨識填「商品」
-- productType 中若含有系列名稱修飾詞（如「光誘恆吻唇膏」「怪獸級持色唇膏」「水嘟嘟蜜光潤唇膏」），只保留最後的核心品類詞（唇膏），去除前綴系列名
-- spec 只填容量或數量規格（如 "3g"、"600ml"、"1.5g"、"3條"），找不到則填 ""
-- spec 不要填色號：色號格式包括 "#01"、"No.3"、"G03"、"N 352"、"PK-1"、純數字編號（如 "18"、"352"）、英數混合碼（如 "RD301"）
+For each product name, extract: i (index), brand, productType, spec.
 
-範例輸入與輸出：
-輸入：
+Rules:
+- brand: main brand name only (English preferred), remove repeated Chinese translations (e.g. "KATE 凱婷 凱婷" → brand="KATE")
+- productType: core product category in Chinese, ≥2 chars (e.g. 唇膏, 唇釉, 唇線筆). Remove series name prefix, keep only the last core word. If unknown use 商品
+- spec: size/quantity only (e.g. "3g", "600ml"). Empty string if not found. Do NOT include color codes like #01, G03, RD301
+- Remove promotional tags like 【即期品】【特惠】
+
+Example input:
 0: KATE 凱婷 凱婷 怪獸級持色唇膏 18 3g
 1: MAYBELLINE 媚比琳 媚比琳 水嘟嘟蜜光潤唇膏 07嘟嘟野莓 2.8g #保濕0唇紋
 2: CEZANNE CEZANNE 修飾大師唇線筆 021-01 0.25G
