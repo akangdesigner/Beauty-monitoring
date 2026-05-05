@@ -40,6 +40,9 @@ function daysToCron(days) {
 // ── 當前排程任務 ──
 let currentCronJob = null;
 
+// ── 批次爬蟲進度 ──
+let scrapeProgress = { running: false, phase: '', current: 0, total: 0, message: '' };
+
 function applySchedule(s) {
   if (currentCronJob) { currentCronJob.stop(); currentCronJob = null; }
   if (!s.enabled || !s.urls?.length) return;
@@ -920,6 +923,8 @@ async function runBatchScrapeJob() {
   const enabledUrls = current.urls.filter(u => u.enabled);
   if (!enabledUrls.length) return { total: 0, results: [] };
 
+  scrapeProgress = { running: true, phase: 'scraping', current: 0, total: enabledUrls.length, message: '正在爬取網頁...' };
+
   // Phase 1：全部平台爬取完畢再繼續
   logger.info(`[批次] Phase 1：爬取 ${enabledUrls.length} 個網址`);
   const jobs = [];
@@ -929,9 +934,12 @@ async function runBatchScrapeJob() {
     try {
       const products = await scrapeCategoryPage(item.url, item.platform);
       jobs.push({ jobId, platform: item.platform, label: item.label, products });
+      scrapeProgress.current++;
+      scrapeProgress.message = `爬取中：${item.label || item.platform}（${scrapeProgress.current}/${scrapeProgress.total}）`;
       logger.info(`[批次] ${item.platform} 爬取完成，${products.length} 筆`);
     } catch (err) {
       getDB().prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`).run(err.message, jobId);
+      scrapeProgress.current++;
       logger.error(`[批次] 爬取失敗 ${item.url}: ${err.message}`);
     }
   }
@@ -939,24 +947,29 @@ async function runBatchScrapeJob() {
   // Phase 2：所有平台的商品名稱合併，一次送 AI 解析
   const allNames = [...new Set(jobs.flatMap(j => j.products.filter(p => p.price).map(p => p.name)))];
   logger.info(`[批次] Phase 2：AI 解析 ${allNames.length} 個不重複名稱`);
+  scrapeProgress = { running: true, phase: 'ai', current: 0, total: allNames.length, message: `AI 解析商品名稱（共 ${allNames.length} 筆）...` };
   const sharedAiMap = await parseNamesWithAI(allNames);
   logger.info(`[批次] AI 解析完成，${sharedAiMap.size} 筆成功`);
 
   // Phase 3：逐平台比對分類寫入
   logger.info(`[批次] Phase 3：比對寫入資料庫`);
+  scrapeProgress = { running: true, phase: 'saving', current: 0, total: jobs.length, message: '寫入資料庫...' };
   const results = [];
   for (const { jobId, platform, label, products } of jobs) {
     try {
       const result = await matchAndUpdate(products, platform, sharedAiMap);
       getDB().prepare(`UPDATE scrape_jobs SET status='success', products_scraped=?, finished_at=datetime('now','localtime') WHERE id=?`).run(result.total, jobId);
       results.push({ platform, label, status: 'success', total: result.total, added: result.added, updated: result.updated });
+      scrapeProgress.current++;
       logger.info(`[批次] ${platform} 完成：新增 ${result.added}，更新 ${result.updated}`);
     } catch (err) {
       getDB().prepare(`UPDATE scrape_jobs SET status='failed', error_detail=?, finished_at=datetime('now','localtime') WHERE id=?`).run(err.message, jobId);
       results.push({ platform, label, status: 'failed', error: err.message });
+      scrapeProgress.current++;
     }
   }
 
+  scrapeProgress = { running: false, phase: 'done', current: enabledUrls.length, total: enabledUrls.length, message: '完成！' };
   return { total: enabledUrls.length, success: results.filter(r => r.status === 'success').length, failed: results.filter(r => r.status === 'failed').length, results };
 }
 
@@ -972,6 +985,11 @@ router.post('/run-enabled', (req, res) => {
     .catch(err => logger.error(`[批次抓取] 發生非預期錯誤: ${err.message}`));
 
   res.json({ message: '批次抓取已啟動，請稍後查看歷史紀錄或狀態', count: enabledUrls.length });
+});
+
+// GET /api/scraper/progress
+router.get('/progress', (req, res) => {
+  res.json(scrapeProgress);
 });
 
 // GET /api/scraper/status

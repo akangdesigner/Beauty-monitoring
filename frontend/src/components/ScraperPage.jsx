@@ -88,6 +88,7 @@ export default function ScraperPage({ isOnline, toast }) {
   const [schedSaving, setSchedSaving] = useState(false)
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchResults, setBatchResults] = useState(null)
+  const [batchProgress, setBatchProgress] = useState(null)
 
   // ── 執行歷史 ──
   const [history,     setHistory]     = useState([])
@@ -209,14 +210,12 @@ export default function ScraperPage({ isOnline, toast }) {
     if (batchRunning) {
       timer = setInterval(async () => {
         try {
-          const res = await api.getScraperStatus();
-          if (res.status === 'idle') {
+          const prog = await api.getScraperProgress();
+          setBatchProgress(prog);
+          if (!prog.running && prog.phase === 'done') {
             setBatchRunning(false);
             loadAll();
             toast('批次抓取已完成', 'success');
-            // 從歷史紀錄獲取最近一次批次結果
-            const history = await api.getScraperHistory(10);
-            // 這裡可以嘗試自組最近一次批次結果顯示，但為了簡單先 loadAll 即可
           }
         } catch (err) {
           console.error('Polling error:', err);
@@ -233,6 +232,7 @@ export default function ScraperPage({ isOnline, toast }) {
     if (!enabled.length) { toast('尚無已啟用的監控網址', 'error'); return }
     setBatchRunning(true)
     setBatchResults(null)
+    setBatchProgress(null)
     try {
       const data = await api.runScraperEnabled()
       toast(data.message || '批次抓取已啟動，請稍候…', 'success')
@@ -453,15 +453,31 @@ export default function ScraperPage({ isOnline, toast }) {
       <div className="card" style={{ padding: '20px 24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div className="section-title">自動排程設定</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <button
               className="btn btn-primary"
               onClick={handleBatchScrape}
               disabled={batchRunning || !isOnline}
               style={{ fontSize: 12, padding: '6px 14px' }}
             >
-              {batchRunning ? '⏳ 批次執行中…' : '▶ 批次手動抓取'}
+              {batchRunning ? '⏳ 執行中…' : '▶ 批次手動抓取'}
             </button>
+            {batchRunning && batchProgress && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-muted)' }}>
+                <div style={{ width: 120, height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    borderRadius: 3,
+                    background: 'var(--accent)',
+                    width: batchProgress.total > 0
+                      ? `${Math.round((batchProgress.current / batchProgress.total) * 100)}%`
+                      : '30%',
+                    transition: 'width 0.4s ease',
+                  }} />
+                </div>
+                <span>{batchProgress.message}</span>
+              </div>
+            )}
             <Toggle
               value={schedule.enabled}
               onChange={() => setSchedule(s => ({ ...s, enabled: !s.enabled }))}
