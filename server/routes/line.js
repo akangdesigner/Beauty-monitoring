@@ -118,7 +118,7 @@ router.post('/report/gaps', async (req, res) => {
   } catch (err) {
     // @line/bot-sdk v9: HTTPFetchError 用 .body，舊版用 .originalError?.response?.data
     const detail = err.body || err.originalError?.response?.data || err.message;
-    res.status(400).json({ error: `發送失敗：${typeof detail === 'string' ? detail : JSON.stringify(detail)}` });
+    res.status(400).json({ error: typeof detail === 'string' ? detail : JSON.stringify(detail) });
   }
 });
 
