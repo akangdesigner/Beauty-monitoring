@@ -6,35 +6,16 @@ Chart.register(BarElement, BarController, LinearScale, CategoryScale, Tooltip)
 
 const UNIT_RE = /[\d.]+\s*(ml|l|g|mg|kg|oz|抽|片|包|入|顆|條)\s*$/i
 
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { display: false },
-    tooltip: {
-      backgroundColor: '#13102299',
-      titleColor: '#f0e8ff',
-      bodyColor: '#9d8fba',
-      borderColor: '#2a2245',
-      borderWidth: 1,
-      callbacks: { label: c => ` ${c.dataset.label}  NT$${c.raw?.toLocaleString() ?? '—'}` }
-    }
-  },
-  scales: {
-    x: { ticks: { color: '#5c5075', font: { family: 'DM Mono', size: 10 }, maxRotation: 30 }, grid: { color: '#ffffff08' } },
-    y: { ticks: { color: '#5c5075', font: { family: 'DM Mono', size: 10 }, callback: v => 'NT$' + v.toLocaleString() }, grid: { color: '#ffffff08' } }
-  }
-}
 
 function truncate(str, n) {
   return str && str.length > n ? str.slice(0, n) + '…' : (str || '—')
 }
 
-// 依 brand+base_name 分組，各平台取最低價
+// 依 base_name 分組，各平台取最低價
 function groupByBaseName(products) {
   const map = new Map()
   for (const p of products) {
-    const key = `${p.brand || ''}||${p.base_name || p.name || p.id}`
+    const key = p.base_name || p.name || p.id
     if (!map.has(key)) {
       map.set(key, { ...p })
     } else {
@@ -48,6 +29,8 @@ function groupByBaseName(products) {
   }
   return [...map.values()]
 }
+
+const PF_COLOR = { watsons: '#00a0e3', cosmed: '#f47920', poya: '#16a34a' }
 
 export default function TrendChart({ products }) {
   const [mode, setMode] = useState('brand')
@@ -83,23 +66,70 @@ export default function TrendChart({ products }) {
   const current = selected || options[0] || ''
 
   const filtered = useMemo(() => {
+    const label = (p) => mode === 'brand' ? typeOf(p) : (p.brand || p.base_name || '')
     return grouped
       .filter(p => mode === 'brand' ? p.brand === current : typeOf(p) === current)
-      .sort((a, b) => {
-        const maxA = Math.max(a.watsons?.price || 0, a.cosmed?.price || 0, a.poya?.price || 0)
-        const maxB = Math.max(b.watsons?.price || 0, b.cosmed?.price || 0, b.poya?.price || 0)
-        return maxB - maxA
-      })
-      .slice(0, 12)
-  }, [products, mode, current, typeOf])
+      .sort((a, b) => label(a).localeCompare(label(b), 'zh-TW'))
+      .slice(0, 20)
+  }, [grouped, mode, current, typeOf])
+
+  // 每個商品一條柱子（最低價），顏色代表最便宜的平台
+  const barColors = filtered.map(p => {
+    const pfs = ['watsons', 'cosmed', 'poya'].filter(pf => p[pf]?.price)
+    if (!pfs.length) return '#8b5cf699'
+    const best = pfs.reduce((a, b) => p[a].price <= p[b].price ? a : b)
+    return PF_COLOR[best] + '99'
+  })
+  const borderColors = filtered.map(p => {
+    const pfs = ['watsons', 'cosmed', 'poya'].filter(pf => p[pf]?.price)
+    if (!pfs.length) return '#8b5cf6'
+    const best = pfs.reduce((a, b) => p[a].price <= p[b].price ? a : b)
+    return PF_COLOR[best]
+  })
 
   const data = {
-    labels: filtered.map(p => truncate(p.base_name || p.name, 8)),
-    datasets: [
-      { label: '屈臣氏', data: filtered.map(p => p.watsons?.price || null), backgroundColor: '#00a0e380', borderColor: '#00a0e3', borderWidth: 1, borderRadius: 3 },
-      { label: '康是美', data: filtered.map(p => p.cosmed?.price  || null), backgroundColor: '#f4792080', borderColor: '#f47920', borderWidth: 1, borderRadius: 3 },
-      { label: '寶雅',   data: filtered.map(p => p.poya?.price    || null), backgroundColor: '#16a34a80', borderColor: '#16a34a', borderWidth: 1, borderRadius: 3 },
-    ]
+    labels: filtered.map(p => truncate(p.base_name || p.name, 12)),
+    datasets: [{
+      label: '最低價',
+      data: filtered.map(p => {
+        const prices = ['watsons', 'cosmed', 'poya'].map(pf => p[pf]?.price).filter(Boolean)
+        return prices.length ? Math.min(...prices) : null
+      }),
+      backgroundColor: barColors,
+      borderColor: borderColors,
+      borderWidth: 1,
+      borderRadius: 3,
+      barThickness: 28,
+    }]
+  }
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#13102299',
+        titleColor: '#f0e8ff',
+        bodyColor: '#9d8fba',
+        borderColor: '#2a2245',
+        borderWidth: 1,
+        callbacks: {
+          label: (c) => {
+            const p = filtered[c.dataIndex]
+            const lines = []
+            if (p.watsons?.price) lines.push(` 屈臣氏  NT$${p.watsons.price.toLocaleString()}`)
+            if (p.cosmed?.price)  lines.push(` 康是美  NT$${p.cosmed.price.toLocaleString()}`)
+            if (p.poya?.price)    lines.push(` 寶雅    NT$${p.poya.price.toLocaleString()}`)
+            return lines
+          }
+        }
+      }
+    },
+    scales: {
+      x: { ticks: { color: '#5c5075', font: { family: 'DM Mono', size: 10 }, maxRotation: 30 }, grid: { color: '#ffffff08' } },
+      y: { ticks: { color: '#5c5075', font: { family: 'DM Mono', size: 10 }, callback: v => 'NT$' + v.toLocaleString() }, grid: { color: '#ffffff08' } }
+    }
   }
 
   return (
@@ -122,6 +152,7 @@ export default function TrendChart({ products }) {
       </div>
 
       <div className="chart-legend" style={{ marginBottom: 10 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>柱色 = 最低價平台：</span>
         {[['#00a0e3', '屈臣氏'], ['#f47920', '康是美'], ['#16a34a', '寶雅']].map(([color, label]) => (
           <div key={label} className="legend-item">
             <div className="legend-dot" style={{ background: color }} />

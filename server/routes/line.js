@@ -116,8 +116,9 @@ router.post('/report/gaps', async (req, res) => {
     await LineService.sendGapReport(gaps);
     res.json({ ok: true, count: gaps.length });
   } catch (err) {
-    const detail = err.originalError?.response?.data || err.message;
-    res.status(400).json({ error: `發送失敗：${JSON.stringify(detail)}` });
+    // @line/bot-sdk v9: HTTPFetchError 用 .body，舊版用 .originalError?.response?.data
+    const detail = err.body || err.originalError?.response?.data || err.message;
+    res.status(400).json({ error: `發送失敗：${typeof detail === 'string' ? detail : JSON.stringify(detail)}` });
   }
 });
 

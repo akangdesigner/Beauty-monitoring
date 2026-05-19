@@ -220,7 +220,8 @@ const LineService = {
   async sendGapReport(gaps) {
     const client = getClient();
     const userId = getTargetUserId();
-    if (!client || !userId) return;
+    if (!client) throw new Error('尚未設定 LINE Channel Access Token，請確認 .env 或設定頁面');
+    if (!userId) throw new Error('尚未設定 LINE User ID，請至「初始設定」頁面填入');
 
     const PF_LABEL = { watsons: '屈臣氏', cosmed: '康是美', poya: '寶雅' };
     const PF_COLOR = { watsons: '#00a0e3', cosmed: '#f47920', poya: '#16a34a' };

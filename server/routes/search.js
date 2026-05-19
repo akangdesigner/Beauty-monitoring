@@ -78,7 +78,7 @@ async function scrapeSearchPage(url, platform) {
           return Number.isFinite(n) && n > 0 ? n : null;
         };
         return Array.from(document.querySelectorAll('.product-card__vertical__wrapper')).map(el => {
-          const name      = el.querySelector('[data-qe-id="body-sale-page-title-text"]')?.innerText?.trim() || '';
+          const name      = el.querySelector('[data-qe-id="body-meta-field-text"]')?.innerText?.trim() || '';
           const priceText = el.querySelector('[data-qe-id="body-price-text"]')?.innerText?.trim() || '';
           const origText  = el.querySelector('[data-qe-id="body-suggest-price-text"]')?.innerText?.trim() || '';
           const imgs = Array.from(el.querySelectorAll('img'));
@@ -248,24 +248,45 @@ async function groupProductsWithAI(allItems) {
   }
 }
 
-// 相關性過濾：商品名稱必須包含查詢字串的至少一個有意義片段
+// 中文詞邊界包含檢查：避免「護唇膏」在搜「唇膏」時混入結果
+// 規則：q 在 name 中的匹配位置，若前面恰好是單一漢字（複合詞前綴如「護」），則拒絕
+// 若前面是非漢字（英數/標點）或是 2+ 漢字組成的形容詞修飾，則接受
+function boundaryIncludes(name, q) {
+  const isCJK = c => /[一-鿿]/.test(c);
+  let idx = 0;
+  while ((idx = name.indexOf(q, idx)) !== -1) {
+    if (idx === 0) return true;
+    const prev = name[idx - 1];
+    if (!isCJK(prev)) return true;
+    const prevPrev = idx > 1 ? name[idx - 2] : '';
+    if (isCJK(prevPrev)) return true;
+    idx++;
+  }
+  return false;
+}
+
+// 相關性過濾：商品名稱必須包含查詢字串的關鍵部分
 function relevantToQuery(productName, query) {
   if (!productName || !query) return false;
   const name = productName.toLowerCase().replace(/\s+/g, '');
   const q    = query.toLowerCase().replace(/\s+/g, '');
 
-  // 完全包含
-  if (name.includes(q)) return true;
+  // 完全包含（詞邊界版，防止「護唇膏」混入「唇膏」）
+  if (boundaryIncludes(name, q)) return true;
 
-  // 按空格分詞後逐段比對（如「3CE 唇釉」→「3CE」或「唇釉」出現即符合）
-  for (const token of query.trim().split(/\s+/)) {
-    if (token.length >= 2 && name.includes(token.toLowerCase())) return true;
+  // 按空格分詞 — 多個 token 時用 AND 邏輯（每個詞都必須出現）
+  const tokens = query.trim().split(/\s+/).filter(t => t.length >= 2);
+  if (tokens.length > 1) {
+    return tokens.every(t => boundaryIncludes(name, t.toLowerCase()));
   }
 
-  // 中文 bigram：取查詢字串任意連續兩字，出現在商品名中即符合
+  // 單一 token：先做完整包含（已由 boundaryIncludes 涵蓋，此處備用）
+  if (tokens.length === 1 && name.includes(tokens[0].toLowerCase())) return true;
+
+  // 中文 bigram（單 token 短查詢的模糊匹配，如「精華」匹配「精華液」）
   for (let i = 0; i <= q.length - 2; i++) {
     const bg = q.slice(i, i + 2);
-    if (/^[a-z0-9]{2}$/.test(bg)) continue; // 純英數 bigram 跳過，避免誤判
+    if (/^[a-z0-9]{2}$/.test(bg)) continue; // 純英數 bigram 跳過
     if (name.includes(bg)) return true;
   }
 
