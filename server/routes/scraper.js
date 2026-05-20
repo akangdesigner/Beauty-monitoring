@@ -164,7 +164,8 @@ For each product name, extract: i (index), brand, productType, spec.
 Rules:
 - brand: main brand name only (English preferred), remove repeated Chinese translations (e.g. "KATE 凱婷 凱婷" → brand="KATE")
 - productType: MUST be in Traditional Chinese. Core product category only, ≥2 chars. Examples: 唇膏, 唇釉, 唇線筆, 護唇膏, 洗髮精. Remove series name prefix, keep only the last core word. If unknown use 商品. NEVER use English for productType.
-- spec: size/quantity only (e.g. "3g", "600ml"). Empty string if not found. Do NOT include color codes like #01, G03, RD301
+- spec: physical size OR quantity that distinguishes variants (e.g. "3g", "600ml", "1.5g", "3條組", "2入組", "4片組"). Empty string if not found. Do NOT include color codes like #01, G03, RD301, or series names
+- 組合包數量（如3條組、2入組、4片組）視同規格，請確實填入 spec
 - Remove promotional tags like 【即期品】【特惠】
 
 Example input:
@@ -174,8 +175,10 @@ Example input:
 3: DHC DHC 極潤護唇膏 1.5g
 4: VISEE光誘恆吻唇膏 N 352
 5: OPERA渲漾水色唇膏N-06玫紅 3.6g
+6: DHC DHC 純欖護唇膏3條組(史努比限定)
+7: CARMEX小蜜媞 防曬SPF15修護唇膏 Minis 2入組
 輸出：
-[{"i":0,"brand":"KATE","productType":"唇膏","spec":"3g"},{"i":1,"brand":"MAYBELLINE","productType":"唇膏","spec":"2.8g"},{"i":2,"brand":"CEZANNE","productType":"唇線筆","spec":"0.25g"},{"i":3,"brand":"DHC","productType":"護唇膏","spec":"1.5g"},{"i":4,"brand":"VISEE","productType":"唇膏","spec":""},{"i":5,"brand":"OPERA","productType":"唇膏","spec":"3.6g"}]
+[{"i":0,"brand":"KATE","productType":"唇膏","spec":"3g"},{"i":1,"brand":"MAYBELLINE","productType":"唇膏","spec":"2.8g"},{"i":2,"brand":"CEZANNE","productType":"唇線筆","spec":"0.25g"},{"i":3,"brand":"DHC","productType":"護唇膏","spec":"1.5g"},{"i":4,"brand":"VISEE","productType":"唇膏","spec":""},{"i":5,"brand":"OPERA","productType":"唇膏","spec":"3.6g"},{"i":6,"brand":"DHC","productType":"護唇膏","spec":"3條組"},{"i":7,"brand":"CARMEX小蜜媞","productType":"唇膏","spec":"2入組"}]
 
 只回傳 JSON 陣列，不要其他文字。商品清單：`;
 
@@ -242,10 +245,9 @@ Example input:
           }
           const productType = (p.productType || '').trim();
           const rawSpec = (p.spec || '').trim().replace(/\s+/g, '');
-          // 只接受帶單位的規格，且必須實際出現在商品名稱中（防止 AI 幻覺）
-          const isValidUnit = /^[\d.]+\s*(ml|l|g|mg|kg|oz|抽|片|包|入|顆|條)$/i.test(rawSpec);
           const nameNorm = originalName.replace(/\s+/g, '').toLowerCase();
-          const spec = (isValidUnit && nameNorm.includes(rawSpec.toLowerCase())) ? rawSpec : '';
+          // AI 決定 spec 內容，這裡只驗「spec 確實出現在商品名稱中」防止幻覺
+          const spec = (rawSpec && nameNorm.includes(rawSpec.toLowerCase())) ? rawSpec : '';
           result.set(originalName, {
             brand,
             productType,
@@ -340,12 +342,16 @@ async function scrapeCategoryPage(url, platform) {
     }
 
     if (platform === 'cosmed') {
+      // 等第一批商品卡出現再開始滾（與寶雅邏輯相同）
+      try {
+        await page.waitForSelector('.product-card__vertical__wrapper', { timeout: 20000 });
+      } catch {}
       let prev = 0;
       for (let i = 0; i < 15; i++) {
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
         await new Promise(r => setTimeout(r, 1500));
         const cur = await page.evaluate(() => document.querySelectorAll('.product-card__vertical__wrapper').length);
-        if (cur === prev) break;
+        if (cur === prev && i > 0) break;
         prev = cur;
       }
       return await page.evaluate(() => {
@@ -358,7 +364,7 @@ async function scrapeCategoryPage(url, platform) {
         };
 
         return Array.from(document.querySelectorAll('.product-card__vertical__wrapper')).map(el => {
-          const name = el.querySelector('[data-qe-id="body-sale-page-title-text"]')?.innerText?.trim() || '';
+          const name = el.querySelector('[data-qe-id="body-meta-field-text"]')?.innerText?.trim() || '';
           const priceText = el.querySelector('[data-qe-id="body-price-text"]')?.innerText?.trim() || '';
           const origText  = el.querySelector('[data-qe-id="body-suggest-price-text"]')?.innerText?.trim() || '';
           const imgs = Array.from(el.querySelectorAll('img'));

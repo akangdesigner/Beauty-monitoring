@@ -7,6 +7,22 @@ Chart.register(LineElement, LineController, PointElement, LinearScale, CategoryS
 
 const UNIT_RE = /[\d.]+\s*(ml|l|g|mg|kg|oz|抽|片|包|入|顆|條)\s*$/i
 
+// 依優先順序比對（長的優先，避免「精華液」被「精華」截斷）
+const TYPE_KEYWORDS = [
+  '睫毛膏','護唇膏','唇蜜','唇釉','唇彩','唇線筆','唇線','唇膏',
+  '粉底液','氣墊粉底','粉底霜','粉底','氣墊',
+  '精華液','精華油','精華水','精華',
+  '洗面乳','洗顏乳','洗面','洗顏',
+  '卸妝油','卸妝乳','卸妝水','卸妝液','卸妝',
+  '防曬乳','防曬霜','防曬液','防曬',
+  '化妝水','調理水','噴霧水','噴霧',
+  '眼線液','眼線筆','眼線',
+  '護手霜','眼霜','面霜','乳霜','保濕霜',
+  '身體乳','乳液',
+  '腮紅','修容','打亮','眼影',
+  '面膜','眼膜',
+]
+
 const COLORS = [
   '#c084fc','#60a5fa','#f472b6','#34d399','#fbbf24',
   '#f87171','#38bdf8','#4ade80','#fb923c','#a78bfa',
@@ -19,11 +35,15 @@ const DAYS_OPTIONS = [
   { value: 90, label: '90天' },
 ]
 
-// 取商品「類型」：去掉規格後的最後一個詞
 function typeOf(p) {
   const n = (p.base_name || p.name || '').replace(UNIT_RE, '').trim()
-  const last = n.split(/[\s　]+/).pop() || ''
-  return last.length >= 2 ? last : n
+  for (const t of TYPE_KEYWORDS) {
+    if (n.includes(t)) return t
+  }
+  // fallback：去掉品牌後取第一個詞
+  let rest = n
+  if (p.brand) rest = rest.replace(new RegExp('^' + p.brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'i'), '').trim()
+  return rest.split(/[\s　]+/).find(w => w.length >= 2) || n
 }
 
 export default function TrendChart({ products }) {
@@ -90,39 +110,73 @@ export default function TrendChart({ products }) {
 
   const hasData = allDates.length > 0
 
-  // 每個商品一條線：取當天三平台中最低價
   const chartData = useMemo(() => {
     if (!hasData) return null
-    const datasets = filteredProducts.map((p, i) => {
-      const d = trends[p.id] || {}
-      // 建立 date→minPrice map
-      const priceMap = new Map()
-      ;['watsons', 'cosmed', 'poya'].forEach(pf => {
-        ;(d[pf] || []).forEach(r => {
-          const cur = priceMap.get(r.date)
-          if (cur === undefined || r.price < cur) priceMap.set(r.date, r.price)
-        })
+    let datasets
+
+    if (mode === 'brand') {
+      // 依品牌：依品項類型分組，合併同品項的色號/規格變體
+      const typeMap = new Map()
+      filteredProducts.forEach(p => {
+        const type = typeOf(p)
+        if (!typeMap.has(type)) typeMap.set(type, [])
+        typeMap.get(type).push(p)
       })
-      const color = COLORS[i % COLORS.length]
-      const label = (p.base_name || p.name || '').replace(UNIT_RE, '').trim() || p.name
-      return {
-        label: label.length > 14 ? label.slice(0, 14) + '…' : label,
-        data: allDates.map(d => priceMap.get(d) ?? null),
-        borderColor: color,
-        backgroundColor: color + '18',
-        pointBackgroundColor: color,
-        pointRadius: allDates.length > 20 ? 2 : 3,
-        pointHoverRadius: 5,
-        borderWidth: 1.8,
-        tension: 0.3,
-        spanGaps: false,
-      }
-    })
+      datasets = [...typeMap.entries()].map(([type, prods], i) => {
+        const priceMap = new Map()
+        prods.forEach(p => {
+          const d = trends[p.id] || {}
+          ;['watsons', 'cosmed', 'poya'].forEach(pf => {
+            ;(d[pf] || []).forEach(r => {
+              const cur = priceMap.get(r.date)
+              if (cur === undefined || r.price < cur) priceMap.set(r.date, r.price)
+            })
+          })
+        })
+        const color = COLORS[i % COLORS.length]
+        return {
+          label: type.length > 14 ? type.slice(0, 14) + '…' : type,
+          data: allDates.map(d => priceMap.get(d) ?? null),
+          borderColor: color, backgroundColor: color + '18', pointBackgroundColor: color,
+          pointRadius: allDates.length > 20 ? 2 : 3, pointHoverRadius: 5,
+          borderWidth: 1.8, tension: 0.3, spanGaps: false,
+        }
+      })
+    } else {
+      // 依品項：每個品牌一條線，合併同品牌所有商品取每日最低價
+      const brandMap = new Map()
+      filteredProducts.forEach(p => {
+        const brand = p.brand || '未知品牌'
+        if (!brandMap.has(brand)) brandMap.set(brand, [])
+        brandMap.get(brand).push(p)
+      })
+      datasets = [...brandMap.entries()].map(([brand, prods], i) => {
+        const priceMap = new Map()
+        prods.forEach(p => {
+          const d = trends[p.id] || {}
+          ;['watsons', 'cosmed', 'poya'].forEach(pf => {
+            ;(d[pf] || []).forEach(r => {
+              const cur = priceMap.get(r.date)
+              if (cur === undefined || r.price < cur) priceMap.set(r.date, r.price)
+            })
+          })
+        })
+        const color = COLORS[i % COLORS.length]
+        return {
+          label: brand.length > 14 ? brand.slice(0, 14) + '…' : brand,
+          data: allDates.map(d => priceMap.get(d) ?? null),
+          borderColor: color, backgroundColor: color + '18', pointBackgroundColor: color,
+          pointRadius: allDates.length > 20 ? 2 : 3, pointHoverRadius: 5,
+          borderWidth: 1.8, tension: 0.3, spanGaps: false,
+        }
+      })
+    }
+
     return {
       labels: allDates.map(d => d.slice(5).replace('-', '/')),
       datasets,
     }
-  }, [filteredProducts, trends, allDates, hasData])
+  }, [filteredProducts, trends, allDates, hasData, mode])
 
   const chartOptions = useMemo(() => ({
     responsive: true,
@@ -221,9 +275,16 @@ export default function TrendChart({ products }) {
       {/* 說明文字 */}
       <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
         {mode === 'brand'
-          ? `品牌「${selected}」旗下所有監控商品的最低價走勢`
-          : `品項「${selected}」各商品的最低價走勢（跨品牌比較）`}
-        {filteredProducts.length > 0 && `，共 ${filteredProducts.length} 條線`}
+          ? `品牌「${selected}」各品項走勢（不同色號/規格已合併）`
+          : `品項「${selected}」各品牌最低價走勢比較`}
+        {filteredProducts.length > 0 && (() => {
+          if (mode === 'brand') {
+            const typeCount = new Set(filteredProducts.map(p => typeOf(p))).size
+            return `，共 ${typeCount} 個品項`
+          }
+          const brandCount = new Set(filteredProducts.map(p => p.brand || '未知品牌')).size
+          return `，共 ${brandCount} 個品牌`
+        })()}
       </div>
 
       {/* 圖表 */}
